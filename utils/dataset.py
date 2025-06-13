@@ -122,6 +122,61 @@ class TUMParser:
             self.frames.append(frame)
 
 
+class RawSLAMParser:
+    def __init__(self, input_folder):
+        self.input_folder = input_folder
+        self.load_poses(self.input_folder, frame_rate=32)
+        self.get_filepaths()
+        self.n_img = len(self.color_paths)
+
+    def parse_list(self, filepath, skiprows=0):
+        data = np.loadtxt(filepath, delimiter=" ", dtype=np.unicode_, skiprows=skiprows)
+        return data
+
+    def pose_matrix_from_quaternion(self, pvec):
+        from scipy.spatial.transform import Rotation
+
+        pose = np.eye(4)
+        translation = pvec[:3]
+        euler_angles_deg = pvec[3:]
+
+        # Create rotation matrix from Euler angles (in degrees)
+        rotation = Rotation.from_euler('xyz', euler_angles_deg, degrees=True)
+        pose[:3, :3] = rotation.as_matrix()
+        pose[:3, 3] = translation
+
+        return pose
+
+    def load_poses(self, datapath, frame_rate=-1):
+        if os.path.isfile(os.path.join(datapath, "groundtruth.txt")):
+            pose_list = os.path.join(datapath, "groundtruth.txt")
+        else:
+            print("No gt file found")
+
+        pose_data = self.parse_list(pose_list, skiprows=1)
+        pose_vecs = pose_data[:, 2:].astype(np.float64)
+
+        self.poses = []
+        for pose in pose_vecs:
+            c2w = self.pose_matrix_from_quaternion(pose)
+            self.poses += [c2w]
+
+
+    def get_filepaths(self):
+        groundtruth_file = os.path.join(self.input_folder, 'groundtruth.txt')
+        with open(groundtruth_file, 'r') as f:
+            poses_lines = f.readlines()
+
+        image_list = os.path.join(self.input_folder, 'sRGB')
+        depth_list = os.path.join(self.input_folder, 'depth')
+
+        self.color_paths, self.depth_paths = [], []
+        for line in poses_lines[1:]:
+            frame_name = line.strip().split()[0]
+            frame_name += '.png'
+            self.color_paths += [os.path.join(image_list, frame_name)]
+            self.depth_paths += [os.path.join(depth_list, frame_name)]
+
 class EuRoCParser:
     def __init__(self, input_folder, start_idx=0):
         self.input_folder = input_folder
@@ -222,6 +277,12 @@ class MonocularDataset(BaseDataset):
         self.K = np.array(
             [[self.fx, 0.0, self.cx], [0.0, self.fy, self.cy], [0.0, 0.0, 1.0]]
         )
+        if 'Resize' in config['Dataset'].keys():
+            self.resize = True
+            self.desired_width = config['Dataset']['Resize']['desired_width']
+            self.desired_height = config['Dataset']['Resize']['desired_height']
+        else:
+            self.resize = False
         # distortion parameters
         self.disorted = calibration["distorted"]
         self.dist_coeffs = np.array(
@@ -268,6 +329,19 @@ class MonocularDataset(BaseDataset):
             depth_path = self.depth_paths[idx]
             depth = np.array(Image.open(depth_path)) / self.depth_scale
 
+        if self.resize:
+            print('resizing')
+            image = cv2.resize(
+                image.astype(float),
+                (self.desired_width, self.desired_height),
+                interpolation = cv2.INTER_LINEAR,
+            )
+            depth = cv2.resize(
+                depth.astype(float),
+                (self.desired_width, self.desired_height),
+                interpolation = cv2.INTER_NEAREST,
+            )
+    
         image = (
             torch.from_numpy(image / 255.0)
             .clamp(0.0, 1.0)
@@ -275,6 +349,7 @@ class MonocularDataset(BaseDataset):
             .to(device=self.device, dtype=self.dtype)
         )
         pose = torch.from_numpy(pose).to(device=self.device)
+        print(image.shape)
         return image, depth, pose
 
 
@@ -415,6 +490,17 @@ class ReplicaDataset(MonocularDataset):
         self.poses = parser.poses
 
 
+class RawSLAMDataset(MonocularDataset):
+    def __init__(self, args, path, config):
+        super().__init__(args, path, config)
+        dataset_path = config["Dataset"]["dataset_path"]
+        parser = RawSLAMParser(dataset_path)
+        self.num_imgs = parser.n_img
+        self.color_paths = parser.color_paths
+        self.depth_paths = parser.depth_paths
+        self.poses = parser.poses
+
+
 class EurocDataset(StereoDataset):
     def __init__(self, args, path, config):
         super().__init__(args, path, config)
@@ -524,6 +610,8 @@ def load_dataset(args, path, config):
         return TUMDataset(args, path, config)
     elif config["Dataset"]["type"] == "replica":
         return ReplicaDataset(args, path, config)
+    elif config["Dataset"]["type"] == "rawslam":
+        return RawSLAMDataset(args, path, config)
     elif config["Dataset"]["type"] == "euroc":
         return EurocDataset(args, path, config)
     elif config["Dataset"]["type"] == "realsense":
