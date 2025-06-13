@@ -9,7 +9,7 @@ Results:
   use_wandb: False
 
 Dataset:
-  type: 'tum'
+  type: 'rawslam'
   sensor_type: 'depth'
   pcd_downsample: 128
   pcd_downsample_init: 32

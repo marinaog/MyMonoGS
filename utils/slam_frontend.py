@@ -370,7 +370,6 @@ class FrontEnd(mp.Process):
                 if not self.initialized and self.requested_keyframe > 0:
                     time.sleep(0.01)
                     continue
-
                 viewpoint = Camera.init_from_dataset(
                     self.dataset, cur_frame_idx, projection_matrix
                 )
