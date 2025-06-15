@@ -15,7 +15,9 @@ Dataset:
     distorted: True
     width: 1920
     height: 1080
-    depth_scale: 0.0010000000474974513
+    desired_width: 640
+    desired_height: 360
+    depth_scale: 1000 #0.0010000000474974513
   Resize:
     desired_width: 640
     desired_height: 360
