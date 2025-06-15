@@ -77,8 +77,8 @@ class Camera(nn.Module):
             dataset.cy,
             dataset.fovx,
             dataset.fovy,
-            dataset.height,
-            dataset.width,
+            dataset.desired_height,
+            dataset.desired_width,
             device=dataset.device,
         )
 
