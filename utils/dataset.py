@@ -330,7 +330,6 @@ class MonocularDataset(BaseDataset):
             depth = np.array(Image.open(depth_path)) / self.depth_scale
 
         if self.resize:
-            print('resizing')
             image = cv2.resize(
                 image.astype(float),
                 (self.desired_width, self.desired_height),
@@ -349,7 +348,6 @@ class MonocularDataset(BaseDataset):
             .to(device=self.device, dtype=self.dtype)
         )
         pose = torch.from_numpy(pose).to(device=self.device)
-        print(image.shape)
         return image, depth, pose
 
 
