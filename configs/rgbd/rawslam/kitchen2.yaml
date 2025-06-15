@@ -2,6 +2,7 @@ inherit_from: "configs/rgbd/rawslam/base_config.yaml"
 
 Dataset:
   dataset_path: "datasets/rawslam/kitchen2"
+  raw: True
   Calibration:
     fx: 1380.4
     fy: 1379.3

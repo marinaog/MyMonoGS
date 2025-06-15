@@ -123,7 +123,8 @@ class TUMParser:
 
 
 class RawSLAMParser:
-    def __init__(self, input_folder):
+    def __init__(self, input_folder, raw):
+        self.raw = raw
         self.input_folder = input_folder
         self.load_poses(self.input_folder, frame_rate=32)
         self.get_filepaths()
@@ -167,7 +168,11 @@ class RawSLAMParser:
         with open(groundtruth_file, 'r') as f:
             poses_lines = f.readlines()
 
-        image_list = os.path.join(self.input_folder, 'sRGB')
+        if self.raw:
+            image_list = os.path.join(self.input_folder, 'raw_sRGB')
+        else:
+            image_list = os.path.join(self.input_folder, 'sRGB')
+
         depth_list = os.path.join(self.input_folder, 'depth')
 
         self.color_paths, self.depth_paths = [], []
@@ -283,6 +288,9 @@ class MonocularDataset(BaseDataset):
             self.desired_height = config['Dataset']['Resize']['desired_height']
         else:
             self.resize = False
+        self.raw = False
+        if 'raw' in config['Dataset'].keys() and config['Dataset']['raw']:
+            self.raw = True
         # distortion parameters
         self.disorted = calibration["distorted"]
         self.dist_coeffs = np.array(
@@ -319,7 +327,10 @@ class MonocularDataset(BaseDataset):
         color_path = self.color_paths[idx]
         pose = self.poses[idx]
 
-        image = np.array(Image.open(color_path))
+        # image = np.array(Image.open(color_path))
+        image = cv2.imread(color_path, cv2.IMREAD_UNCHANGED)
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
         depth = None
 
         if self.disorted:
@@ -340,13 +351,22 @@ class MonocularDataset(BaseDataset):
                 (self.desired_width, self.desired_height),
                 interpolation = cv2.INTER_NEAREST,
             )
-    
-        image = (
-            torch.from_numpy(image / 255.0)
-            .clamp(0.0, 1.0)
-            .permute(2, 0, 1)
-            .to(device=self.device, dtype=self.dtype)
-        )
+
+        if self.raw:
+            image = (
+                torch.from_numpy(image / 65535.0)
+                .clamp(0.0, 1.0)
+                .permute(2, 0, 1)
+                .to(device=self.device, dtype=self.dtype)
+            )
+
+        else:
+            image = (
+                torch.from_numpy(image / 255.0)
+                .clamp(0.0, 1.0)
+                .permute(2, 0, 1)
+                .to(device=self.device, dtype=self.dtype)
+            )
         pose = torch.from_numpy(pose).to(device=self.device)
         return image, depth, pose
 
@@ -492,7 +512,8 @@ class RawSLAMDataset(MonocularDataset):
     def __init__(self, args, path, config):
         super().__init__(args, path, config)
         dataset_path = config["Dataset"]["dataset_path"]
-        parser = RawSLAMParser(dataset_path)
+        
+        parser = RawSLAMParser(dataset_path, self.raw)
         self.num_imgs = parser.n_img
         self.color_paths = parser.color_paths
         self.depth_paths = parser.depth_paths

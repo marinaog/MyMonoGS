@@ -122,6 +122,7 @@ def eval_rendering(
     background,
     kf_indices,
     iteration="final",
+    raw=False,
 ):
     interval = 5
     img_pred, img_gt, saved_frame_idx = [], [], []
@@ -140,10 +141,16 @@ def eval_rendering(
         rendering = render(frame, gaussians, pipe, background)["render"]
         image = torch.clamp(rendering, 0.0, 1.0)
 
-        gt = (gt_image.cpu().numpy().transpose((1, 2, 0)) * 255).astype(np.uint8)
-        pred = (image.detach().cpu().numpy().transpose((1, 2, 0)) * 255).astype(
-            np.uint8
-        )
+        if raw:
+            gt = (gt_image.cpu().numpy().transpose((1, 2, 0)) * 65535).astype(np.float32)
+            pred = (image.detach().cpu().numpy().transpose((1, 2, 0)) * 65535).astype(
+                np.float32
+            )
+        else:
+            gt = (gt_image.cpu().numpy().transpose((1, 2, 0)) * 255).astype(np.uint8)
+            pred = (image.detach().cpu().numpy().transpose((1, 2, 0)) * 255).astype(
+                np.uint8
+            )
         gt = cv2.cvtColor(gt, cv2.COLOR_BGR2RGB)
         pred = cv2.cvtColor(pred, cv2.COLOR_BGR2RGB)
         img_pred.append(pred)

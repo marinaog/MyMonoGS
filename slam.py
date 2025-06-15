@@ -48,6 +48,11 @@ class SLAM:
             self.use_gui = True
         self.eval_rendering = self.config["Results"]["eval_rendering"]
 
+        self.raw = False
+        if 'raw' in self.config['Dataset'].keys() and self.config['Dataset']['raw']:
+            self.raw = True
+            print('Using 16 bits raw data')
+
         model_params.sh_degree = 3 if self.use_spherical_harmonics else 0
 
         self.gaussians = GaussianModel(model_params.sh_degree, config=self.config)
@@ -59,7 +64,6 @@ class SLAM:
         self.gaussians.training_setup(opt_params)
         bg_color = [0, 0, 0]
         self.background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
-
         frontend_queue = mp.Queue()
         backend_queue = mp.Queue()
 
@@ -139,6 +143,7 @@ class SLAM:
                 self.background,
                 kf_indices=kf_indices,
                 iteration="before_opt",
+                raw=self.raw,
             )
             columns = ["tag", "psnr", "ssim", "lpips", "RMSE ATE", "FPS"]
             metrics_table = wandb.Table(columns=columns)
