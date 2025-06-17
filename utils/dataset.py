@@ -169,7 +169,7 @@ class RawSLAMParser:
             poses_lines = f.readlines()
 
         if self.raw:
-            image_list = os.path.join(self.input_folder, 'raw_sRGB')
+            image_list = os.path.join(self.input_folder, 'raw_linear_sRGB')
         else:
             image_list = os.path.join(self.input_folder, 'sRGB')
 
@@ -288,6 +288,8 @@ class MonocularDataset(BaseDataset):
             self.desired_height = config['Dataset']['Resize']['desired_height']
         else:
             self.resize = False
+            self.desired_width = calibration["width"]
+            self.desired_height = calibration["height"]
         self.raw = False
         if 'raw' in config['Dataset'].keys() and config['Dataset']['raw']:
             self.raw = True
