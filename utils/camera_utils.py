@@ -64,10 +64,10 @@ class Camera(nn.Module):
         self.projection_matrix = projection_matrix.to(device=device)
 
     @staticmethod
-    def init_from_dataset(dataset, idx, projection_matrix, postproc = False, path = None):
+    def init_from_dataset(dataset, idx, projection_matrix, postproc = False, paths = None):
         if postproc:
             gt_color, gt_depth, _ = dataset[idx]  
-            gt_pose = load_estimated_poses(idx, path) # Obtain it from estimated poses      
+            gt_pose = load_estimated_poses(idx, paths) # Obtain it from estimated poses      
         else:
             gt_color, gt_depth, gt_pose = dataset[idx]
         

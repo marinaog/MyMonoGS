@@ -11,19 +11,23 @@ import os
 import json
 
 
-scene_name = "kitchen2_srgb"
-path = f"results/datasets_rawslam/2025-06-16-13-46-40_goodsRGB"
 raw = False
-# scene_name = "kitchen2_raw"
-# path = f"results/datasets_rawslam/2025-06-17-14-04-14_goodraw"
-# raw = True
+
+pathraw = f"results/datasets_rawslam/2025-06-17-14-04-14_goodraw"
+pathsrgb = f"results/datasets_rawslam/2025-06-16-13-46-40_goodsRGB"
+if raw:
+    scene_name = "kitchen2_raw"
+    ply_path = pathraw + f"/point_cloud/final/point_cloud.ply"
+else:
+    scene_name = "kitchen2_srgb"
+    ply_path = pathsrgb + f"/point_cloud/final/point_cloud.ply"
+
+est_pose_paths =[pathraw + f"/plot/trj_final.json", pathsrgb + f"/plot/trj_final.json"]
 
 config_path = f"configs/rgbd/rawslam/{scene_name}.yaml"
-ply_path = path + f"/point_cloud/final/point_cloud.ply"
-est_pose_path = path + f"/plot/trj_final.json"
+# est_pose_path = path + f"/plot/trj_final.json"
 data_type = "rawslam"
 save_dir = f"{data_type}_{scene_name}"
-
 
 
 config = load_config(config_path)
@@ -48,13 +52,15 @@ projection_matrix = projection_matrix.to(device="cuda")
 cameras = {}
 
 # kf_indices = list(range(0, len(dataset), 5))
-with open(est_pose_path, 'r') as f:
-    data = json.load(f)
+kf_indices = []
+for est_pose_path in est_pose_paths:
+    with open(est_pose_path, 'r') as f:
+        data = json.load(f)
 
-kf_indices = data['trj_id']
+    kf_indices += data['trj_id']
 
 for i in kf_indices:
-    viewpoint = Camera.init_from_dataset(dataset, i, projection_matrix, postproc = True, path = est_pose_path)
+    viewpoint = Camera.init_from_dataset(dataset, i, projection_matrix, postproc = True, paths = est_pose_paths)
     viewpoint.update_RT(viewpoint.R_gt, viewpoint.T_gt)
     viewpoint.compute_grad_mask(config)
     cameras[i] = viewpoint
