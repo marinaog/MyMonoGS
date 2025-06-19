@@ -24,6 +24,20 @@ from utils.logging_utils import Log
 from pathlib import Path
 from PIL import Image
 
+def load_estimated_poses(frame, trajectory_path):
+    with open(trajectory_path, 'r') as f:
+        data = json.load(f)
+
+    trj_ids = data['trj_id']
+    trj_est = data['trj_est']
+
+    if frame not in trj_ids:
+        print(f"{idx} not in trj_ids:{trj_ids}")
+    
+    index_of_frame = trj_ids.index(frame)
+    pose_matrix = np.array(trj_est[index_of_frame])         
+    return np.linalg.inv(pose_matrix)    
+
 
 def evaluate_evo(poses_gt, poses_est, plot_dir, label, monocular=False):
     ## Plot
@@ -216,7 +230,6 @@ def eval_rendering(
         mask = gt_image > 0
 
         psnr_score = psnr((image[mask]).unsqueeze(0), (gt_image[mask]).unsqueeze(0))
-        print(idx, psnr_score)
         ssim_score = ssim((image).unsqueeze(0), (gt_image).unsqueeze(0))
         lpips_score = cal_lpips((image).unsqueeze(0), (gt_image).unsqueeze(0))
 
@@ -230,7 +243,7 @@ def eval_rendering(
     output["mean_lpips"] = float(np.mean(lpips_array))
     output["depth_l1"] = float(np.mean(depth_l1))
 
-    print(output["depth_l1"])
+    print("depth_l1",output["depth_l1"])
     Log(
         f'mean psnr: {output["mean_psnr"]}, ssim: {output["mean_ssim"]}, lpips: {output["mean_lpips"]}',
         tag="Eval",

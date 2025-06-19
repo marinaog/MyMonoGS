@@ -1,8 +1,9 @@
 import torch
 from torch import nn
-
+import numpy as np
 from gaussian_splatting.utils.graphics_utils import getProjectionMatrix2, getWorld2View2
 from utils.slam_utils import image_gradient, image_gradient_mask
+from utils.eval_utils_posteval import load_estimated_poses
 
 
 class Camera(nn.Module):
@@ -63,8 +64,13 @@ class Camera(nn.Module):
         self.projection_matrix = projection_matrix.to(device=device)
 
     @staticmethod
-    def init_from_dataset(dataset, idx, projection_matrix):
-        gt_color, gt_depth, gt_pose = dataset[idx]
+    def init_from_dataset(dataset, idx, projection_matrix, postproc = False, path = None):
+        if postproc:
+            gt_color, gt_depth, _ = dataset[idx]  
+            gt_pose = load_estimated_poses(idx, path) # Obtain it from estimated poses      
+        else:
+            gt_color, gt_depth, gt_pose = dataset[idx]
+        
         return Camera(
             idx,
             gt_color,
@@ -108,6 +114,11 @@ class Camera(nn.Module):
         return self.world_view_transform.inverse()[3, :3]
 
     def update_RT(self, R, t):
+        if isinstance(R, np.ndarray):
+            R = torch.tensor(R, dtype=torch.float32, device=self.device)
+        if isinstance(t, np.ndarray):
+            t = torch.tensor(t, dtype=torch.float32, device=self.device)
+        
         self.R = R.to(device=self.device)
         self.T = t.to(device=self.device)
 
