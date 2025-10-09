@@ -1,3 +1,9 @@
+""""
+This file was created by me to perform evaluation after SLAM, using the saved point cloud and estimated poses.
+It uses both, raw and sRGB estimated poses, in order to be able to compare both resulting renders from the same camera poses.
+"""""
+
+
 import torch
 from munch import munchify
 
@@ -12,22 +18,24 @@ import json
 
 
 raw = False
+scene = "candles"
 
-pathraw = f"results/datasets_rawslam/2025-06-17-14-04-14_goodraw"
-pathsrgb = f"results/datasets_rawslam/2025-06-16-13-46-40_goodsRGB"
+# pathraw = f"results/datasets_rawslam/2025-06-17-14-04-14_goodraw"
+pathraw = f"results/datasets_rawslam/"+scene+"short_raw"
+pathsrgb = f"results/datasets_rawslam/"+scene+"short_srgb"
 if raw:
-    scene_name = "kitchen2_raw"
+    scene_name = scene + "_raw"
     ply_path = pathraw + f"/point_cloud/final/point_cloud.ply"
 else:
-    scene_name = "kitchen2_srgb"
+    scene_name = scene+"_srgb"
     ply_path = pathsrgb + f"/point_cloud/final/point_cloud.ply"
+    config_path = f"configs/rgbd/rawslam/{scene}.yaml"
 
 est_pose_paths =[pathraw + f"/plot/trj_final.json", pathsrgb + f"/plot/trj_final.json"]
 
-config_path = f"configs/rgbd/rawslam/{scene_name}.yaml"
 # est_pose_path = path + f"/plot/trj_final.json"
 data_type = "rawslam"
-save_dir = f"{data_type}_{scene_name}"
+save_dir = f"test{data_type}_{scene_name}"
 
 
 config = load_config(config_path)

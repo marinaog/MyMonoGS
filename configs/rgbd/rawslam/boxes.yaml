@@ -1,8 +1,8 @@
 inherit_from: "configs/rgbd/rawslam/base_config.yaml"
 
 Dataset:
-  dataset_path: "datasets/rawslam/kitchen2"
-  raw: True
+  dataset_path: "datasets/rawslam/boxes"
+  raw: False
   Calibration:
     fx: 1380.4
     fy: 1379.3
@@ -20,5 +20,5 @@ Dataset:
     desired_height: 360
     depth_scale: 1000 #0.0010000000474974513
   Resize:
-    desired_width: 640
-    desired_height: 360
+    desired_width: 320
+    desired_height: 180

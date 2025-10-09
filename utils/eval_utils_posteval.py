@@ -60,30 +60,33 @@ def evaluate_evo(poses_gt, poses_est, plot_dir, label, monocular=False):
     ape_metric.process_data(data)
     ape_stat = ape_metric.get_statistic(metrics.StatisticsType.rmse)
     ape_stats = ape_metric.get_all_statistics()
-    Log("RMSE ATE \[m]", ape_stat, tag="Eval")
+    Log("RMSE ATE [m]", ape_stat, tag="Eval")
 
-    with open(
-        os.path.join(plot_dir, "stats_{}.json".format(str(label))),
-        "w",
-        encoding="utf-8",
-    ) as f:
-        json.dump(ape_stats, f, indent=4)
 
-    plot_mode = evo.tools.plot.PlotMode.xy
-    fig = plt.figure()
-    ax = evo.tools.plot.prepare_axis(fig, plot_mode)
-    ax.set_title(f"ATE RMSE: {ape_stat}")
-    evo.tools.plot.traj(ax, plot_mode, traj_ref, "--", "gray", "gt")
-    evo.tools.plot.traj_colormap(
-        ax,
-        traj_est_aligned,
-        ape_metric.error,
-        plot_mode,
-        min_map=ape_stats["min"],
-        max_map=ape_stats["max"],
-    )
-    ax.legend()
-    plt.savefig(os.path.join(plot_dir, "evo_2dplot_{}.png".format(str(label))), dpi=90)
+    if label == "final":
+        print("label should be final but it is ", label)
+        with open(
+            os.path.join(plot_dir, "stats_{}.json".format(str(label))),
+            "w",
+            encoding="utf-8",
+        ) as f:
+            json.dump(ape_stats, f, indent=4)
+
+        plot_mode = evo.tools.plot.PlotMode.xy
+        fig = plt.figure()
+        ax = evo.tools.plot.prepare_axis(fig, plot_mode)
+        ax.set_title(f"ATE RMSE: {ape_stat}")
+        evo.tools.plot.traj(ax, plot_mode, traj_ref, "--", "gray", "gt")
+        evo.tools.plot.traj_colormap(
+            ax,
+            traj_est_aligned,
+            ape_metric.error,
+            plot_mode,
+            min_map=ape_stats["min"],
+            max_map=ape_stats["max"],
+        )
+        ax.legend()
+        plt.savefig(os.path.join(plot_dir, "evo_2dplot_{}.png".format(str(label))), dpi=90)
 
     return ape_stat
 
@@ -249,9 +252,9 @@ def eval_rendering(
     output["mean_lpips"] = float(np.mean(lpips_array))
     output["depth_l1"] = float(np.mean(depth_l1))
 
-    print("depth_l1",output["depth_l1"])
+    # print("depth_l1",output["depth_l1"])
     Log(
-        f'mean psnr: {output["mean_psnr"]}, ssim: {output["mean_ssim"]}, lpips: {output["mean_lpips"]}',
+        f'depth_l1: {output["depth_l1"]}, mean psnr: {output["mean_psnr"]}, ssim: {output["mean_ssim"]}, lpips: {output["mean_lpips"]}',
         tag="Eval",
     )
 

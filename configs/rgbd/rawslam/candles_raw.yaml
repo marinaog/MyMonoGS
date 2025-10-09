@@ -1,0 +1,24 @@
+inherit_from: "configs/rgbd/rawslam/base_config.yaml"
+
+Dataset:
+  dataset_path: "datasets/rawslam/candles"
+  raw: True
+  Calibration:
+    fx: 1380.4
+    fy: 1379.3
+    cx: 961.6
+    cy: 568.1
+    k1: 0.0
+    k2: 0.0
+    p1: 0.0
+    p2: 0.0
+    k3: 0.0
+    distorted: True
+    width: 1920
+    height: 1080
+    desired_width: 640
+    desired_height: 360
+    depth_scale: 1000 #0.0010000000474974513
+  Resize:
+    desired_width: 320
+    desired_height: 180

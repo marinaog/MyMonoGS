@@ -62,12 +62,28 @@ Our test setup were:
 - Ubuntu 20.04: `pytorch==1.12.1 torchvision==0.13.1 torchaudio==0.12.1 cudatoolkit=11.6`
 - Ubuntu 18.04: `pytorch==1.12.1 torchvision==0.13.1 torchaudio==0.12.1 cudatoolkit=11.3`
 
-## Quick Demo
+## Preparing the RAW dataset
+
+1. Download from hugging face. For the example of the bottles_light scene:
 ```
-bash scripts/download_tum.sh
-python slam.py --config configs/mono/tum/fr3_office.yaml
+wget https://huggingface.co/datasets/marinaog00/RawSLAM/resolve/main/bottles_light.zip
 ```
-You will see a GUI window pops up.
+
+2. Unzip the scene
+3. Make sure the link to the scene is correct in line 134 from extract.py and in configs/rgbd/rawslam/bottles.yaml
+4. Run
+```
+extract.py
+```
+5. Run 
+```
+python slam.py --config configs/rgbd/rawslam/bottles.yaml --eval | tee results/runb_ottles.txt
+```
+6. Change dir of the results in post_evaluation.py
+7. Evaluate with:
+```
+python post_evaluation.py | tee results/posteval_bottles.txt
+```
 
 ## Downloading Datasets
 Running the following scripts will automatically download datasets to the `./datasets` folder.
