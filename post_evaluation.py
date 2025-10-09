@@ -29,7 +29,8 @@ if raw:
 else:
     scene_name = scene+"_srgb"
     ply_path = pathsrgb + f"/point_cloud/final/point_cloud.ply"
-    config_path = f"configs/rgbd/rawslam/{scene}.yaml"
+
+config_path = f"configs/rgbd/rawslam/{scene}.yaml"
 
 est_pose_paths =[pathraw + f"/plot/trj_final.json", pathsrgb + f"/plot/trj_final.json"]
 
