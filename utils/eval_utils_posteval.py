@@ -249,6 +249,107 @@ def eval_rendering(
     )
     return output
 
+
+def eval_rendering_both(
+    frames,
+    gaussians,
+    dataset,
+    save_dir,
+    pipe,
+    background,
+    kf_indices,
+    iteration="final",
+    raw=False,
+    kf_ind_to_save = None
+):
+    interval = 1
+    save_dir = Path(save_dir)
+
+    (save_dir / "renders").mkdir(parents=True, exist_ok=True)
+    (save_dir / "gt").mkdir(parents=True, exist_ok=True)
+    print('Saving it ', save_dir)
+    img_pred, img_gt, saved_frame_idx = [], [], []
+    end_idx = len(frames) - 1 if iteration == "final" or "before_opt" else iteration
+    psnr_array, ssim_array, lpips_array = [], [], []
+    depth_l1 = []
+    cal_lpips = LearnedPerceptualImagePatchSimilarity(
+        net_type="alex", normalize=True
+    ).to("cuda")
+    # s = 0
+    # print(f'Saving every {int(len(kf_indices)/5)} frames')
+    for idx in tqdm(kf_indices):
+        saved_frame_idx.append(idx)
+        frame = frames[idx]
+        gt_image, _, _ = dataset[idx]
+
+        render_pkg = render(frame, gaussians, pipe, background)
+        depth = render_pkg["depth"]
+        gt_depth = torch.from_numpy(frame.depth).to(depth.device)
+        dl1 = torch.abs(depth - gt_depth).mean()
+        depth_l1.append(dl1.detach().cpu().float())
+
+        rendering = render_pkg["render"]
+        image = torch.clamp(rendering, 0.0, 1.0)
+
+        if raw:
+            gt = (gt_image.cpu().numpy().transpose((1, 2, 0)) * 65535).astype(np.uint16)
+            pred = (image.detach().cpu().numpy().transpose((1, 2, 0)) * 65535).astype(
+                np.uint16
+            )
+            gt = raw2normal(gt)
+            gt = (gt * 255).astype(np.uint8)
+            pred = raw2normal(pred)
+            pred = (pred * 255).astype(np.uint8)
+        else: 
+            gt = (gt_image.cpu().numpy().transpose((1, 2, 0)) * 255).astype(np.uint8)
+            pred = (image.detach().cpu().numpy().transpose((1, 2, 0)) * 255).astype(
+                np.uint8
+            )
+        gt = cv2.cvtColor(gt, cv2.COLOR_BGR2RGB)
+        pred = cv2.cvtColor(pred, cv2.COLOR_BGR2RGB)
+        if idx in kf_ind_to_save:
+            f"Saving img {idx}"
+            cv2.imwrite(str(save_dir / "renders" / f'{idx:05d}.png'), pred)
+            cv2.imwrite(str(save_dir / "gt" / f'{idx:05d}.png'), gt)
+        img_pred.append(pred)
+        img_gt.append(gt)
+
+        if raw:
+            gt_image = raw2normal(gt_image, is_torch = True)
+            image = raw2normal(image, is_torch = True)
+        mask = gt_image > 0
+
+        psnr_score = psnr((image[mask]).unsqueeze(0), (gt_image[mask]).unsqueeze(0))
+        ssim_score = ssim((image).unsqueeze(0), (gt_image).unsqueeze(0))
+        lpips_score = cal_lpips((image).unsqueeze(0), (gt_image).unsqueeze(0))
+
+        psnr_array.append(psnr_score.item())
+        ssim_array.append(ssim_score.item())
+        lpips_array.append(lpips_score.item())
+
+    output = dict()
+    output["mean_psnr"] = float(np.mean(psnr_array))
+    output["mean_ssim"] = float(np.mean(ssim_array))
+    output["mean_lpips"] = float(np.mean(lpips_array))
+    output["depth_l1"] = float(np.mean(depth_l1))
+
+    # print("depth_l1",output["depth_l1"])
+    Log(
+        f'depth_l1: {output["depth_l1"]}, mean psnr: {output["mean_psnr"]}, ssim: {output["mean_ssim"]}, lpips: {output["mean_lpips"]}',
+        tag="Eval",
+    )
+
+
+    psnr_save_dir = os.path.join(save_dir, "psnr", str(iteration))
+    mkdir_p(psnr_save_dir)
+
+    json.dump(
+        output,
+        open(os.path.join(psnr_save_dir, "final_result.json"), "w", encoding="utf-8"),
+        indent=4,
+    )
+    return output
+
 def save_gaussians(gaussians, name, iteration, final=False):
     if name is None:
         return
