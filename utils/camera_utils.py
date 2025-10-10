@@ -3,7 +3,6 @@ from torch import nn
 import numpy as np
 from gaussian_splatting.utils.graphics_utils import getProjectionMatrix2, getWorld2View2
 from utils.slam_utils import image_gradient, image_gradient_mask
-from utils.eval_utils_posteval import load_estimated_poses
 
 
 class Camera(nn.Module):
@@ -64,10 +63,10 @@ class Camera(nn.Module):
         self.projection_matrix = projection_matrix.to(device=device)
 
     @staticmethod
-    def init_from_dataset(dataset, idx, projection_matrix, postproc = False, paths = None):
+    def init_from_dataset(dataset, idx, projection_matrix, postproc = False, pose = None):
         if postproc:
             gt_color, gt_depth, _ = dataset[idx]  
-            gt_pose = load_estimated_poses(idx, paths) # Obtain it from estimated poses      
+            gt_pose = pose # Obtained from estimated poses      
         else:
             gt_color, gt_depth, gt_pose = dataset[idx]
         

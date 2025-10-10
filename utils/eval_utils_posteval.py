@@ -24,26 +24,6 @@ from utils.logging_utils import Log
 from pathlib import Path
 from PIL import Image
 
-def load_estimated_poses(frame, trajectory_paths):
-    trj_ids = []
-    for trajectory_path in trajectory_paths:
-        with open(trajectory_path, 'r') as f:
-            data = json.load(f)
-
-        trj_id = data['trj_id']
-        trj_est = data['trj_est']
-        trj_ids += trj_id
-        if frame not in trj_id:
-            continue
-        index_of_frame = trj_id.index(frame)
-        print(len(trj_est), index_of_frame)
-        pose_matrix = np.array(trj_est[index_of_frame])         
-        return np.linalg.inv(pose_matrix)    
-
-    if frame not in trj_ids:
-        print(f"{idx} not in trj_ids:{trj_ids}")
-        raise ValueError
-
 
 def evaluate_evo(poses_gt, poses_est, plot_dir, label, monocular=False):
     ## Plot
