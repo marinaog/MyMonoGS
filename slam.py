@@ -232,22 +232,35 @@ if __name__ == "__main__":
         config["Results"]["use_wandb"] = True
 
     if config["Results"]["save_results"]:
-        mkdir_p(config["Results"]["save_dir"])
-        current_datetime = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
-        path = config["Dataset"]["dataset_path"].split("/")
-        save_dir = os.path.join(
-            config["Results"]["save_dir"], path[-3] + "_" + path[-2], current_datetime
-        )
-        tmp = args.config
-        tmp = tmp.split(".")[0]
-        config["Results"]["save_dir"] = save_dir
+        base_results_dir = config["Results"]["save_dir"]
+        mkdir_p(base_results_dir)
+
+        dataset_path = config["Dataset"]["dataset_path"]  # e.g. "datasets/rawslam/candles"
+        path_parts = dataset_path.strip("/").split("/")
+        scene_name = path_parts[-1]  # "candles"
+        dataset_group = "_".join(path_parts[:-1])  # "datasets_rawslam"
+
+        suffix = "_raw" if config["Dataset"].get("raw", False) else "_srgb"
+        save_dir_base = os.path.join(base_results_dir, f"{dataset_group}/{scene_name}{suffix}")
+
+        save_dir = save_dir_base
+        version = 2
+        while os.path.exists(save_dir):
+            save_dir = f"{save_dir_base}_{version}"
+            version += 1
+        version -= 1
         mkdir_p(save_dir)
+
+        # Save updated config
+        config["Results"]["save_dir"] = save_dir
         with open(os.path.join(save_dir, "config.yml"), "w") as file:
             documents = yaml.dump(config, file)
-        Log("saving results in " + save_dir)
+
+        Log(f"saving results in {save_dir}")
+
         run = wandb.init(
             project="MonoGS",
-            name=f"{tmp}_{current_datetime}",
+            name=f"{dataset_group}/{scene_name}{suffix}_{version}",
             config=config,
             mode=None if config["Results"]["use_wandb"] else "disabled",
         )
