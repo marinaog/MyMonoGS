@@ -105,9 +105,20 @@ def get_loss_mapping_rgb(config, image, depth, viewpoint):
     rgb_boundary_threshold = config["Training"]["rgb_boundary_threshold"]
 
     rgb_pixel_mask = (gt_image.sum(dim=0) > rgb_boundary_threshold).view(*mask_shape)
-    l1_rgb = torch.abs(image * rgb_pixel_mask - gt_image * rgb_pixel_mask)
+    
+    if config["Training"]["loss"] == "rawnerf":
+        rgb_render_clip = torch.clamp(image, max=1.0)
+        resid_sq_clip = (rgb_render_clip - gt_image) ** 2
+        resid_sq_clip_masked = resid_sq_clip * rgb_pixel_mask
+        # Scale by gradient of log tonemapping curve.
+        scaling_grad = 1.0 / (rgb_render_clip.detach() + 1e-2)
+        # Reweighted L2 loss.
+        loss_rgb = (resid_sq_clip_masked * scaling_grad**2)     
 
-    return l1_rgb.mean()
+    else: # default and original l1 loss 
+        loss_rgb = torch.abs(image * rgb_pixel_mask - gt_image * rgb_pixel_mask)
+
+    return loss_rgb.mean()
 
 
 def get_loss_mapping_rgbd(config, image, depth, viewpoint, initialization=False):
