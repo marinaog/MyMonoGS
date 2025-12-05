@@ -51,7 +51,7 @@ class SLAM:
         self.raw = False
         if 'raw' in self.config['Dataset'].keys() and self.config['Dataset']['raw']:
             self.raw = True
-            print('Using 16 bits raw data')
+            print(f'Using 16 bits raw data, a {config['Training']['loss']} loss and alpha = {config['Training']['alpha']}')
 
         model_params.sh_degree = 3 if self.use_spherical_harmonics else 0
 
@@ -208,6 +208,7 @@ if __name__ == "__main__":
     parser = ArgumentParser(description="Training script parameters")
     parser.add_argument("--config", type=str)
     parser.add_argument("--eval", action="store_true")
+    parser.add_argument("--forcename", type=str, default=None)
 
     args = parser.parse_args(sys.argv[1:])
 
@@ -236,19 +237,28 @@ if __name__ == "__main__":
         mkdir_p(base_results_dir)
 
         dataset_path = config["Dataset"]["dataset_path"]  # e.g. "datasets/rawslam/candles"
-        path_parts = dataset_path.strip("/").split("/")
-        scene_name = path_parts[-1]  # "candles"
-        dataset_group = "_".join(path_parts[:-1])  # "datasets_rawslam"
+      
+        if args.forcename is not None:
+            save_dir = os.path.join(base_results_dir, args.forcename)
+        else:
+            path_parts = dataset_path.strip("/").split("/")
+            scene_name = path_parts[-1]  # "candles"
+            dataset_group = "_".join(path_parts[:-1])  # "datasets_rawslam"
 
-        suffix = "_raw" if config["Dataset"].get("raw", False) else "_srgb"
-        save_dir_base = os.path.join(base_results_dir, f"{dataset_group}/{scene_name}{suffix}")
+            suffix = "_raw" if config["Dataset"].get("raw", False) else "_srgb"
+            suffix += "_loss" if config["Training"]["loss"] == "rawnerf" else ""
+            save_dir_base = os.path.join(base_results_dir, f"{dataset_group}/{scene_name}{suffix}")
 
-        save_dir = save_dir_base
-        version = 2
-        while os.path.exists(save_dir):
-            save_dir = f"{save_dir_base}_{version}"
-            version += 1
-        version -= 1
+            save_dir = save_dir_base
+            version = 2
+            while os.path.exists(save_dir):
+                save_dir = f"{save_dir_base}_{version}"
+                version += 1
+            if version > 0:
+                version -= 1
+            else:
+                version = ""
+
         mkdir_p(save_dir)
 
         # Save updated config
@@ -257,15 +267,28 @@ if __name__ == "__main__":
             documents = yaml.dump(config, file)
 
         Log(f"saving results in {save_dir}")
-
-        run = wandb.init(
-            project="MonoGS",
-            name=f"{dataset_group}/{scene_name}{suffix}_{version}",
-            config=config,
-            mode=None if config["Results"]["use_wandb"] else "disabled",
-        )
+        
+        if args.forcename is not None:
+            run = wandb.init(
+                project="MonoGS",
+                name=f"datasets_rawslam/{args.forcename}",
+                config=config,
+                mode=None if config["Results"]["use_wandb"] else "disabled",
+            )
+        else:
+            run = wandb.init(
+                project="MonoGS",
+                name=f"{dataset_group}/{scene_name}{suffix}_{version}",
+                config=config,
+                mode=None if config["Results"]["use_wandb"] else "disabled",
+            )
         wandb.define_metric("frame_idx")
         wandb.define_metric("ate*", step_metric="frame_idx")
+        wandb.define_metric("PSNR*", step_metric="frame_idx")
+        wandb.define_metric("iteration_count")
+        wandb.define_metric("loss_rgb", step_metric="iteration_count")
+
+
 
     slam = SLAM(config, save_dir=save_dir)
 

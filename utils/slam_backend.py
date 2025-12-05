@@ -1,6 +1,6 @@
 import random
 import time
-
+import wandb
 import torch
 import torch.multiprocessing as mp
 from tqdm import tqdm
@@ -230,6 +230,10 @@ class BackEnd(mp.Process):
             isotropic_loss = torch.abs(scaling - scaling.mean(dim=1).view(-1, 1))
             loss_mapping += 10 * isotropic_loss.mean()
             loss_mapping.backward()
+            wandb.log({
+                "loss_rgb": loss_mapping.item(),
+                "iteration_count": self.iteration_count
+            })
             gaussian_split = False
             ## Deinsifying / Pruning Gaussians
             with torch.no_grad():
@@ -365,6 +369,8 @@ class BackEnd(mp.Process):
         self.frontend_queue.put(msg)
 
     def run(self):
+        if wandb.run is None:  # only init if not already running
+            wandb.init(project="MonoGS", resume="allow", config=self.config)
         while True:
             if self.backend_queue.empty():
                 if self.pause:

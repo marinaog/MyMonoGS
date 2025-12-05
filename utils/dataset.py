@@ -152,7 +152,7 @@ class RawSLAMParser:
         if os.path.isfile(os.path.join(datapath, "groundtruth.txt")):
             pose_list = os.path.join(datapath, "groundtruth.txt")
         else:
-            print("No gt file found")
+            print("No gt file found in ", datapath)
 
         pose_data = self.parse_list(pose_list, skiprows=1)
         pose_vecs = pose_data[:, 2:].astype(np.float64)

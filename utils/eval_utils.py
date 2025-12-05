@@ -131,6 +131,7 @@ def eval_rendering(
     cal_lpips = LearnedPerceptualImagePatchSimilarity(
         net_type="alex", normalize=True
     ).to("cuda")
+    latest_frame_idx = kf_indices[-1] + 2 if iteration else kf_indices[-1] + 1
     for idx in range(0, end_idx, interval):
         if idx in kf_indices:
             continue
@@ -170,6 +171,8 @@ def eval_rendering(
     output["mean_psnr"] = float(np.mean(psnr_array))
     output["mean_ssim"] = float(np.mean(ssim_array))
     output["mean_lpips"] = float(np.mean(lpips_array))
+
+    wandb.log({"frame_idx": latest_frame_idx, "PSNR": float(np.mean(psnr_array))})
 
     Log(
         f'mean psnr: {output["mean_psnr"]}, ssim: {output["mean_ssim"]}, lpips: {output["mean_lpips"]}',

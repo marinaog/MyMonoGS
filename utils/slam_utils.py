@@ -111,7 +111,7 @@ def get_loss_mapping_rgb(config, image, depth, viewpoint):
         resid_sq_clip = (rgb_render_clip - gt_image) ** 2
         resid_sq_clip_masked = resid_sq_clip * rgb_pixel_mask
         # Scale by gradient of log tonemapping curve.
-        scaling_grad = 1.0 / (rgb_render_clip.detach() + 1e-2)
+        scaling_grad = 1.0 / (rgb_render_clip.detach() + 0.5)
         # Reweighted L2 loss.
         loss_rgb = (resid_sq_clip_masked * scaling_grad**2)     
 
