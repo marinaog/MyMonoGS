@@ -27,7 +27,6 @@ def render(
     pipe,
     bg_color: torch.Tensor,
     scaling_modifier=1.0,
-    override_color=None,
     mask=None,
 ):
     """
@@ -96,7 +95,7 @@ def render(
     # from SHs in Python, do it. If not, then SH -> RGB conversion will be done by rasterizer.
     shs = None
     colors_precomp = None
-    if colors_precomp is None:
+    if pipe.use_mlp is False:
         if pipe.convert_SHs_python:
             shs_view = pc.get_features.transpose(1, 2).view(
                 -1, 3, (pc.max_sh_degree + 1) ** 2
@@ -110,7 +109,7 @@ def render(
         else:
             shs = pc.get_features
     else:
-        colors_precomp = override_color
+        colors_precomp = pc.get_mlp_color(pc, viewpoint_camera)
 
     # Rasterize visible Gaussians to image, obtain their radii (on screen).
     if mask is not None:

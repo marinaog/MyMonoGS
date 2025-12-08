@@ -19,26 +19,34 @@ import argparse
 
 def main(args):
     # Access arguments from args.<name>
-    both = args.both
-    raw = args.raw
-    scene = args.scene
-    runnum = args.runnum
-    data_type = args.data_type
+    both = True #args.both 
+    raw = True #args.raw
+    scene = "candles" #args.scene
+    runnum = "5" #args.runnum
+    data_type = "rawslam" #args.data_type
 
-    pathresults = f"results/datasets_rawslam/"+scene
+    pathresults = f"results/datasets_rawslam/all_candles_experiments/"+scene
 
     if both:
-        # Paths
-        ply_path_raw = pathresults + f"_raw_{runnum}/point_cloud/final/point_cloud.ply"
-        config_path_raw = f"configs/rgbd/rawslam/{scene}_raw.yaml"
-        est_pose_path_raw = pathresults + f"_raw_{runnum}/plot/trj_final.json"
-        save_dir_raw = f"BOTHrawslam_{scene}_raw_{runnum}"
+        # # Paths
+        # ply_path_raw = pathresults + f"_raw100_{runnum}/point_cloud/final/point_cloud.ply"
+        # config_path_raw = f"configs/rgbd/rawslam/{scene}_raw_loss.yaml"
+        # est_pose_path_raw = pathresults + f"_raw100_{runnum}/plot/trj_final.json"
+        # save_dir_raw = f"BOTHrawslam_{scene}_raw100_{runnum}"
+        ply_path_raw = "results/datasets_rawslam/candles_raw_loss_4/point_cloud/final/point_cloud.ply"
+        config_path_raw = f"configs/rgbd/rawslam/{scene}_raw_loss.yaml"
+        est_pose_path_raw = "results/datasets_rawslam/candles_raw_loss_4/plot/trj_final.json"
+        save_dir_raw = f"BOTHrawslam_{scene}_raw100epsm1_{runnum}"
 
-
-        ply_path_srgb = pathresults + f"_srgb_{runnum}/point_cloud/final/point_cloud.ply"
+        # ply_path_srgb = pathresults + f"_srgb100_{runnum}/point_cloud/final/point_cloud.ply"
+        # config_path_srgb = f"configs/rgbd/rawslam/{scene}.yaml"
+        # est_pose_path_srgb = pathresults + f"_srgb100_{runnum}/plot/trj_final.json"
+        # save_dir_srgb = f"BOTHrawslam_{scene}_srgb100_{runnum}"
+        ply_path_srgb = pathresults + f"_srgb100_{runnum}/point_cloud/final/point_cloud.ply"
         config_path_srgb = f"configs/rgbd/rawslam/{scene}.yaml"
-        est_pose_path_srgb = pathresults + f"_srgb_{runnum}/plot/trj_final.json"
-        save_dir_srgb = f"BOTHrawslam_{scene}_srgb_{runnum}"
+        est_pose_path_srgb = pathresults + f"_srgb100_{runnum}/plot/trj_final.json"
+        save_dir_srgb = f"BOTHrawslam_{scene}_srgb100_{runnum}"
+
 
         # Load config and dataset
         config_raw = load_config(config_path_raw)
@@ -59,14 +67,14 @@ def main(args):
 
         opt_params_raw = munchify(config_raw["opt_params"])
         gaussians_raw = GaussianModel(model_params_raw.sh_degree, config=config_raw)
-        gaussians_raw.load_ply(ply_path_raw)
+        gaussians_raw.load_ply(ply_path_raw, pipeline_params_raw.use_mlp)
         projection_matrix_raw = getProjectionMatrix2(znear=0.01, zfar=100.0, fx=dataset_raw.fx, fy=dataset_raw.fy,
                                                 cx=dataset_raw.cx, cy=dataset_raw.cy, W=dataset_raw.width, H=dataset_raw.height).transpose(0, 1)
         projection_matrix_raw = projection_matrix_raw.to(device="cuda")
 
         opt_params_srgb = munchify(config_srgb["opt_params"])   
         gaussians_srgb = GaussianModel(model_params_srgb.sh_degree, config=config_srgb)
-        gaussians_srgb.load_ply(ply_path_srgb)
+        gaussians_srgb.load_ply(ply_path_srgb, use_mlp=False)
         projection_matrix_srgb = getProjectionMatrix2(znear=0.01, zfar=100.0, fx=dataset_srgb.fx, fy=dataset_srgb.fy,
                                                 cx=dataset_srgb.cx, cy=dataset_srgb.cy, W=dataset_srgb.width, H=dataset_srgb.height).transpose(0, 1)
         projection_matrix_srgb = projection_matrix_srgb.to(device="cuda")
@@ -171,7 +179,7 @@ def main(args):
 
         opt_params = munchify(config["opt_params"])
         gaussians = GaussianModel(model_params.sh_degree, config=config)
-        gaussians.load_ply(ply_path)
+        gaussians.load_ply(ply_path, pipeline_params.use_mlp)
         projection_matrix = getProjectionMatrix2(znear=0.01, zfar=100.0, fx=dataset.fx, fy=dataset.fy,
                                                 cx=dataset.cx, cy=dataset.cy, W=dataset.width, H=dataset.height).transpose(0, 1)
         projection_matrix = projection_matrix.to(device="cuda")

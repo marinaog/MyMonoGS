@@ -48,6 +48,7 @@ Training:
   lr:
     cam_rot_delta: 0.003
     cam_trans_delta: 0.001
+  loss: "l1"
 
 
 
@@ -81,3 +82,4 @@ model_params:
 pipeline_params:
   convert_SHs_python: False
   compute_cov3D_python: False
+  use_mlp: False

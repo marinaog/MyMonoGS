@@ -20,6 +20,7 @@ from utils.logging_utils import Log
 from utils.multiprocessing_utils import FakeQueue
 from utils.slam_backend import BackEnd
 from utils.slam_frontend import FrontEnd
+from utils.registry import ARCH_REGISTRY
 
 
 class SLAM:
@@ -53,6 +54,23 @@ class SLAM:
             self.raw = True
             print(f'Using 16 bits raw data, a {config['Training']['loss']} loss and alpha = {config['Training']['alpha']}')
 
+        # Initialize color MLP if specified
+        if pipeline_params.use_mlp:
+            assert self.raw, "Error: MLP usage requires raw data (self.raw must be True)."
+
+            color_mlp_opt = self.config.get("color_mlp_opt", {})
+            color_mlp_opt = munchify(color_mlp_opt)
+            network_type = color_mlp_opt.pop('type')
+            # Use the imported registry
+            net = ARCH_REGISTRY.get(network_type)(**color_mlp_opt) 
+            self.color_mlp = net.to("cuda") # Instantiate the MLP and move to GPU
+        else:
+            self.color_mlp = None
+
+
+        if self.color_mlp is not None:
+            self.gaussians.set_mlp(self.color_mlp)
+
         model_params.sh_degree = 3 if self.use_spherical_harmonics else 0
 
         self.gaussians = GaussianModel(model_params.sh_degree, config=self.config)
@@ -61,7 +79,27 @@ class SLAM:
             model_params, model_params.source_path, config=config
         )
 
-        self.gaussians.training_setup(opt_params)
+        if self.color_mlp:
+            mlp_opt_params = munchify(config["mlp_opt_params"])
+            self.gaussians.training_setup(opt_params, mlp_opt_params)
+        else:
+            self.gaussians.training_setup(opt_params, None)
+
+        # --- NEW MLP OPTIMIZER ---
+        self.color_mlp_optimizer = None
+        if self.color_mlp is not None:
+            mlp_opt_args = munchify(self.config["optim_color_mlp"]) # Assume config block is named this
+            
+            # The MLP is a single set of parameters managed separately
+            self.color_mlp_optimizer = torch.optim.Adam(
+                self.color_mlp.parameters(),
+                lr=mlp_opt_args.lr,
+                eps=mlp_opt_args.eps,
+                weight_decay=mlp_opt_args.weight_decay,
+                betas=mlp_opt_args.betas
+            )
+
+            
         bg_color = [0, 0, 0]
         self.background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
         frontend_queue = mp.Queue()
@@ -189,7 +227,7 @@ class SLAM:
                 FPS,
             )
             wandb.log({"Metrics": metrics_table})
-            save_gaussians(self.gaussians, self.save_dir, "final_after_opt", final=True)
+            save_gaussians(self.gaussians, self.save_dir, "final_after_opt", use_mlp = pipeline_params.use_mlp, final=True)
 
         backend_queue.put(["stop"])
         backend_process.join()

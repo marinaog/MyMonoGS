@@ -190,7 +190,7 @@ def eval_rendering(
     return output
 
 
-def save_gaussians(gaussians, name, iteration, final=False):
+def save_gaussians(gaussians, name, iteration, use_mlp, final=False):
     if name is None:
         return
     if final:
@@ -199,4 +199,4 @@ def save_gaussians(gaussians, name, iteration, final=False):
         point_cloud_path = os.path.join(
             name, "point_cloud/iteration_{}".format(str(iteration))
         )
-    gaussians.save_ply(os.path.join(point_cloud_path, "point_cloud.ply"))
+    gaussians.save_ply(os.path.join(point_cloud_path, "point_cloud.ply"), use_mlp)

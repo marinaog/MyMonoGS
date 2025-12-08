@@ -90,10 +90,46 @@ class GaussianModel:
         features_dc = self._features_dc
         features_rest = self._features_rest
         return torch.cat((features_dc, features_rest), dim=1)
+    
+    @property
+    def get_mlp_features(self):
+        # LE3D returns the DC (Bias b_i) and the Rest (Feature f_i)
+        # Note: LE3D uses [:, 0, :] to remove the middle dimension (which is 1)
+        # Assuming f_i is in _features_rest and b_i is in _features_dc
+        
+        # Original: Shape (N, 3, 1), (N, 3, (SH_D+1)^2-1)
+        # New: Shape (N, 3, 1), (N, L, 1)
+
+        # In LE3D, the shapes are:
+        # _features_dc[:, 0, :] -> (N, 3) (This is b_i)
+        # _features_rest[:, 0, :] -> (N, L) (This is f_i)
+        
+        return self._features_dc[:, 0, :], self._features_rest[:, 0, :]
 
     @property
     def get_opacity(self):
         return self.opacity_activation(self._opacity)
+    
+    # MLP stuff
+    def set_mlp(self, mlp_instance):
+        self.color_mlp = mlp_instance # Store reference to the shared MLP
+
+    def get_mlp_color(self, viewpoint_camera):
+        # 1. Get Gaussian features (f_i and b_i)
+        f_i, b_i = self.get_mlp_features() # Need to modify get_features to return f_i, b_i
+
+        # 2. Get Viewing Direction/Pose (v)
+        # You need the camera pose information v here.
+        dir_pp = (self.get_xyz - viewpoint_camera.camera_center.repeat(self.get_xyz.shape[0], 1))
+        v = dir_pp / dir_pp.norm(dim=1, keepdim=True) # Normalized viewing direction (d)
+
+        # 3. MLP Forward Pass (F_theta(f_i, v))
+        F_theta_output = self.color_mlp(f_i, v) 
+
+        # 4. Final Color Equation
+        colors_precomp = torch.exp(F_theta_output + b_i)
+
+        return colors_precomp
 
     def get_covariance(self, scaling_modifier=1):
         return self.covariance_activation(
@@ -104,7 +140,7 @@ class GaussianModel:
         if self.active_sh_degree < self.max_sh_degree:
             self.active_sh_degree += 1
 
-    def create_pcd_from_image(self, cam_info, init=False, scale=2.0, depthmap=None):
+    def create_pcd_from_image(self, cam_info, pipe, init=False, scale=2.0, depthmap=None, ):
         cam = cam_info
         image_ab = (torch.exp(cam.exposure_a)) * cam.original_image + cam.exposure_b
         image_ab = torch.clamp(image_ab, 0.0, 1.0)
@@ -128,7 +164,10 @@ class GaussianModel:
             rgb = o3d.geometry.Image(rgb_raw.astype(np.uint8))
             depth = o3d.geometry.Image(depth_raw.astype(np.float32))
 
-        return self.create_pcd_from_image_and_depth(cam, rgb, depth, init)
+        if pipe.use_mlp:
+            return self.create_pcd_from_image_and_depth_mlp(cam, rgb, depth, init)
+        else:
+            return self.create_pcd_from_image_and_depth(cam, rgb, depth, init)
 
     def create_pcd_from_image_and_depth(self, cam, rgb, depth, init=False):
         if init:
@@ -202,6 +241,103 @@ class GaussianModel:
 
         return fused_point_cloud, features, scales, rots, opacities
 
+    def create_pcd_from_image_and_depth_mlp(self, cam, rgb, depth, init=False):
+        # --- Standard Point Cloud Creation (Copied from original) ---
+        if init:
+            downsample_factor = self.config["Dataset"]["pcd_downsample_init"]
+        else:
+            downsample_factor = self.config["Dataset"]["pcd_downsample"]
+        point_size = self.config["Dataset"]["point_size"]
+        if "adaptive_pointsize" in self.config["Dataset"]:
+            if self.config["Dataset"]["adaptive_pointsize"]:
+                point_size = min(0.05, point_size * np.median(depth))
+        rgbd = o3d.geometry.RGBDImage.create_from_color_and_depth(
+            rgb,
+            depth,
+            depth_scale=1.0,
+            depth_trunc=100.0,
+            convert_rgb_to_intensity=False,
+        )
+
+        W2C = getWorld2View2(cam.R, cam.T).cpu().numpy()
+        pcd_tmp = o3d.geometry.PointCloud.create_from_rgbd_image(
+            rgbd,
+            o3d.camera.PinholeCameraIntrinsic(
+                cam.image_width,
+                cam.image_height,
+                cam.fx,
+                cam.fy,
+                cam.cx,
+                cam.cy,
+            ),
+            extrinsic=W2C,
+            project_valid_depth_only=True,
+        )
+        pcd_tmp = pcd_tmp.random_down_sample(1.0 / downsample_factor)
+        new_xyz = np.asarray(pcd_tmp.points)
+        new_rgb = np.asarray(pcd_tmp.colors)
+
+        pcd = BasicPointCloud(
+            points=new_xyz, colors=new_rgb, normals=np.zeros((new_xyz.shape[0], 3))
+        )
+        self.ply_input = pcd
+
+        # --- MLP Feature Initialization (New Logic) ---
+        fused_point_cloud = torch.from_numpy(np.asarray(pcd.points)).float().cuda()
+        fused_color_rgb = torch.from_numpy(np.asarray(pcd.colors)).float().cuda()
+        
+        # Define MLP feature constants (based on your 'color_feat_opt')
+        MLP_FEATURE_LENGTH = 32  # L (Dimension of f_i)
+        MLP_FEATURE_SIGMA = 0.1  # sigma_f
+
+        # 1. Color Bias (b_i): log(fused_color_rgb)
+        # Used as f_dc. We clamp for stability before taking the log.
+        fused_bias_log = torch.log(torch.clamp(fused_color_rgb, min=1e-6))
+        
+        # b_i tensor shape: (N, 3, 1) -> self._features_dc shape
+        features_dc = fused_bias_log[:, :, None].contiguous() 
+
+        # 2. Feature Vector (f_i): random N(0, sigma_f)
+        # Used as f_rest. Shape (N, L, 1) -> self._features_rest shape
+        features_rest = (
+            torch.randn((fused_color_rgb.shape[0], MLP_FEATURE_LENGTH, 1))
+            .float()
+            .cuda()
+        ) * MLP_FEATURE_SIGMA
+
+        # --- Geometric/Opacity Initialization (Copied from original) ---
+        dist2 = (
+            torch.clamp_min(
+                distCUDA2(torch.from_numpy(np.asarray(pcd.points)).float().cuda()),
+                0.0000001,
+            )
+            * point_size
+        )
+        scales = torch.log(torch.sqrt(dist2))[..., None]
+        if not self.isotropic:
+            scales = scales.repeat(1, 3)
+
+        rots = torch.zeros((fused_point_cloud.shape[0], 4), device="cuda")
+        rots[:, 0] = 1
+        opacities = inverse_sigmoid(
+            0.5
+            * torch.ones(
+                (fused_point_cloud.shape[0], 1), dtype=torch.float, device="cuda"
+            )
+        )
+        
+        # The original function returns fused_point_cloud, features, scales, rots, opacities.
+        # We need to package the new f_dc and f_rest into the expected 'features' format 
+        # for compatibility with extend_from_pcd_mlp's input.
+        
+        # For MLP, we use a placeholder tensor for 'features' since the real features are dc/rest.
+        # The original 'features' tensor was large: (N, 3, (self.max_sh_degree + 1)**2).
+        # We will package the new features separately and adapt the calling function.
+        
+        # To maintain the structure for the *caller* function, we can return the two feature parts.
+        return fused_point_cloud, features_dc, features_rest, scales, rots, opacities
+
+
     def init_lr(self, spatial_lr_scale):
         self.spatial_lr_scale = spatial_lr_scale
 
@@ -231,21 +367,70 @@ class GaussianModel:
             new_kf_ids=new_unique_kfIDs,
             new_n_obs=new_n_obs,
         )
+    
+    def extend_from_pcd_mlp(
+            self, fused_point_cloud, features_dc, features_rest, scales, rots, opacities, kf_id
+    ):
+        new_xyz = nn.Parameter(fused_point_cloud.requires_grad_(True))
+        
+        # --- NEW: Use the provided DC and Rest features directly ---
+        new_features_dc = nn.Parameter(
+            features_dc.contiguous().requires_grad_(True) # features_dc (b_i) is (N, 3, 1)
+        )
+        new_features_rest = nn.Parameter(
+            features_rest.contiguous().requires_grad_(True) # features_rest (f_i) is (N, L, 1)
+        )
+        # -----------------------------------------------------------
+        
+        new_scaling = nn.Parameter(scales.requires_grad_(True))
+        new_rotation = nn.Parameter(rots.requires_grad_(True))
+        new_opacity = nn.Parameter(opacities.requires_grad_(True))
+
+        new_unique_kfIDs = torch.ones((new_xyz.shape[0])).int() * kf_id
+        new_n_obs = torch.zeros((new_xyz.shape[0])).int()
+        
+        # The densification_postfix can be reused as it handles f_dc and f_rest separately.
+        self.densification_postfix(
+            new_xyz,
+            new_features_dc,
+            new_features_rest,
+            new_opacity,
+            new_scaling,
+            new_rotation,
+            new_kf_ids=new_unique_kfIDs,
+            new_n_obs=new_n_obs,
+        )
 
     def extend_from_pcd_seq(
-        self, cam_info, kf_id=-1, init=False, scale=2.0, depthmap=None
+        self, cam_info, pipe, kf_id=-1, init=False, scale=2.0, depthmap=None
     ):
-        fused_point_cloud, features, scales, rots, opacities = (
-            self.create_pcd_from_image(cam_info, init, scale=scale, depthmap=depthmap)
-        )
-        self.extend_from_pcd(
-            fused_point_cloud, features, scales, rots, opacities, kf_id
-        )
+        if pipe.use_mlp:
+            fused_point_cloud, features_dc, features_rest, scales, rots, opacities = (
+                self.create_pcd_from_image(cam_info, pipe, init, scale=scale, depthmap=depthmap)
+            )
+            self.extend_from_pcd_mlp(
+                fused_point_cloud, features_dc, features_rest, scales, rots, opacities, kf_id
+            )
+        else:
+            fused_point_cloud, features, scales, rots, opacities = (
+                self.create_pcd_from_image(cam_info, pipe, init, scale=scale, depthmap=depthmap)
+            )
+            self.extend_from_pcd(
+                fused_point_cloud, features, scales, rots, opacities, kf_id
+            )
 
-    def training_setup(self, training_args):
+    def training_setup(self, training_args, mlp_training_args=None):
         self.percent_dense = training_args.percent_dense
         self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
+
+        if mlp_training_args is None:
+            lr_dc = training_args.feature_lr
+            lr_rest = training_args.feature_lr / 20.0
+        else:
+            # You must define these rates in your training_args config
+            lr_dc = mlp_training_args.feature_lr_mlp_bias # e.g., 1e-4 for the bias (b_i)
+            lr_rest = mlp_training_args.feature_lr_mlp_feat # e.g., 2e-3 for the feature vector (f_i)
 
         l = [
             {
@@ -255,12 +440,12 @@ class GaussianModel:
             },
             {
                 "params": [self._features_dc],
-                "lr": training_args.feature_lr,
+                "lr": lr_dc,
                 "name": "f_dc",
             },
             {
                 "params": [self._features_rest],
-                "lr": training_args.feature_lr / 20.0,
+                "lr": lr_rest,
                 "name": "f_rest",
             },
             {
@@ -309,13 +494,22 @@ class GaussianModel:
                 param_group["lr"] = lr
                 return lr
 
-    def construct_list_of_attributes(self):
+    def construct_list_of_attributes(self, use_mlp):
         l = ["x", "y", "z", "nx", "ny", "nz"]
         # All channels except the 3 DC
         for i in range(self._features_dc.shape[1] * self._features_dc.shape[2]):
             l.append("f_dc_{}".format(i))
-        for i in range(self._features_rest.shape[1] * self._features_rest.shape[2]):
+
+        if use_mlp:
+            # Assume MLP mode (N, L, 1) -> L features
+            num_f_rest_channels = self._features_rest.shape[1]
+        else:
+            # Assume SH mode (N, 3, (SH_D+1)^2 - 1) -> 3 * (SH_coeffs - 1) features
+            num_f_rest_channels = self._features_rest.shape[1] * self._features_rest.shape[2]
+
+        for i in range(num_f_rest_channels):
             l.append("f_rest_{}".format(i))
+
         l.append("opacity")
         for i in range(self._scaling.shape[1]):
             l.append("scale_{}".format(i))
@@ -323,7 +517,7 @@ class GaussianModel:
             l.append("rot_{}".format(i))
         return l
 
-    def save_ply(self, path):
+    def save_ply(self, path, use_mlp):
         mkdir_p(os.path.dirname(path))
 
         xyz = self._xyz.detach().cpu().numpy()
@@ -349,7 +543,7 @@ class GaussianModel:
         rotation = self._rotation.detach().cpu().numpy()
 
         dtype_full = [
-            (attribute, "f4") for attribute in self.construct_list_of_attributes()
+            (attribute, "f4") for attribute in self.construct_list_of_attributes(use_mlp)
         ]
         elements = np.empty(xyz.shape[0], dtype=dtype_full)
         attributes = np.concatenate(
@@ -374,7 +568,7 @@ class GaussianModel:
         optimizable_tensors = self.replace_tensor_to_optimizer(opacities_new, "opacity")
         self._opacity = optimizable_tensors["opacity"]
 
-    def load_ply(self, path):
+    def load_ply(self, path, use_mlp):
         plydata = PlyData.read(path)
 
         def fetchPly_nocolor(path):
@@ -407,14 +601,33 @@ class GaussianModel:
             if p.name.startswith("f_rest_")
         ]
         extra_f_names = sorted(extra_f_names, key=lambda x: int(x.split("_")[-1]))
-        assert len(extra_f_names) == 3 * (self.max_sh_degree + 1) ** 2 - 3
+        num_f_rest_loaded = len(extra_f_names)
         features_extra = np.zeros((xyz.shape[0], len(extra_f_names)))
         for idx, attr_name in enumerate(extra_f_names):
             features_extra[:, idx] = np.asarray(plydata.elements[0][attr_name])
-        # Reshape (P,F*SH_coeffs) to (P, F, SH_coeffs except DC)
-        features_extra = features_extra.reshape(
-            (features_extra.shape[0], 3, (self.max_sh_degree + 1) ** 2 - 1)
-        )
+
+        if use_mlp:
+            # --- MLP Mode ---
+            # Features are (N, L) and need to be (N, L, 1) for storage.
+            # L is the number of loaded features.
+            
+            # Note: We enforce max_sh_degree=0 to prevent accidental SH usage during rendering.
+            self.active_sh_degree = 0 
+            self.max_sh_degree = 0 
+
+            # Reshape (N, L) to (N, L, 1)
+            features_extra = features_extra[:, :, np.newaxis]
+
+            # print(f"Loaded MLP features with L={num_f_rest_loaded}. Setting SH degree to 0.")
+
+        if not use_mlp:
+            assert len(extra_f_names) == 3 * (self.max_sh_degree + 1) ** 2 - 3
+
+            # Reshape (P,F*SH_coeffs) to (P, F, SH_coeffs except DC)
+            features_extra = features_extra.reshape(
+                (features_extra.shape[0], 3, (self.max_sh_degree + 1) ** 2 - 1)
+            )
+            self.active_sh_degree = self.max_sh_degree
 
         scale_names = [
             p.name
@@ -460,7 +673,6 @@ class GaussianModel:
         self._rotation = nn.Parameter(
             torch.tensor(rots, dtype=torch.float, device="cuda").requires_grad_(True)
         )
-        self.active_sh_degree = self.max_sh_degree
         self.max_radii2D = torch.zeros((self._xyz.shape[0]), device="cuda")
         self.unique_kfIDs = torch.zeros((self._xyz.shape[0]))
         self.n_obs = torch.zeros((self._xyz.shape[0]), device="cpu").int()

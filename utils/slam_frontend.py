@@ -355,7 +355,7 @@ class FrontEnd(mp.Process):
                             monocular=self.monocular,
                         )
                         save_gaussians(
-                            self.gaussians, self.save_dir, "final", final=True
+                            self.gaussians, self.save_dir, "final", use_mlp = self.config["pipeline_params"]["use_mlp"], final=True
                         )
                     break
 
