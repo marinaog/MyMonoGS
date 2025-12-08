@@ -39,6 +39,10 @@ mlp_opt_params:
     out_feats: 3
     final_bias: ~
     final_act: torch.exp
+  optim_color_mlp:
+    lr: 1.0e-4
+    weight_decay: 0
+    betas: [0.9, 0.999]
 
 pipeline_params:
   use_mlp: True

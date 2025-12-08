@@ -66,10 +66,6 @@ class SLAM:
         else:
             self.color_mlp = None
 
-
-        if self.color_mlp is not None:
-            self.gaussians.set_mlp(self.color_mlp)
-
         model_params.sh_degree = 3 if self.use_spherical_harmonics else 0
 
         self.gaussians = GaussianModel(model_params.sh_degree, config=self.config)
@@ -79,6 +75,7 @@ class SLAM:
         )
 
         if self.color_mlp:
+            self.gaussians.set_mlp(self.color_mlp)
             mlp_opt_params = munchify(config["mlp_opt_params"])
             self.gaussians.training_setup(opt_params, mlp_opt_params)
         else:
@@ -87,13 +84,11 @@ class SLAM:
         # --- NEW MLP OPTIMIZER ---
         self.color_mlp_optimizer = None
         if self.color_mlp is not None:
-            mlp_opt_args = munchify(self.config["optim_color_mlp"]) # Assume config block is named this
-            
+            mlp_opt_args = munchify(self.config["mlp_opt_params"]["optim_color_mlp"]) 
             # The MLP is a single set of parameters managed separately
             self.color_mlp_optimizer = torch.optim.Adam(
                 self.color_mlp.parameters(),
                 lr=mlp_opt_args.lr,
-                eps=mlp_opt_args.eps,
                 weight_decay=mlp_opt_args.weight_decay,
                 betas=mlp_opt_args.betas
             )
