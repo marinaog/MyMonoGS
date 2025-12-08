@@ -21,7 +21,7 @@ from utils.multiprocessing_utils import FakeQueue
 from utils.slam_backend import BackEnd
 from utils.slam_frontend import FrontEnd
 from utils.registry import ARCH_REGISTRY
-
+import utils.color_mlp_arch
 
 class SLAM:
     def __init__(self, config, save_dir=None):
@@ -58,8 +58,7 @@ class SLAM:
         if pipeline_params.use_mlp:
             assert self.raw, "Error: MLP usage requires raw data (self.raw must be True)."
 
-            color_mlp_opt = self.config.get("color_mlp_opt", {})
-            color_mlp_opt = munchify(color_mlp_opt)
+            color_mlp_opt = config["mlp_opt_params"]["color_mlp_opt"]
             network_type = color_mlp_opt.pop('type')
             # Use the imported registry
             net = ARCH_REGISTRY.get(network_type)(**color_mlp_opt) 
@@ -99,7 +98,7 @@ class SLAM:
                 betas=mlp_opt_args.betas
             )
 
-            
+
         bg_color = [0, 0, 0]
         self.background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
         frontend_queue = mp.Queue()

@@ -30,6 +30,15 @@ Training:
 mlp_opt_params:
   feature_lr_mlp_bias: 1e-4
   feature_lr_mlp_feat: 2e-3
+  color_mlp_opt:
+    type: TinyColorMLP
+    in_feats: 16
+    dir_feats: 3
+    act: relu
+    mid_feats_list: [16]
+    out_feats: 3
+    final_bias: ~
+    final_act: torch.exp
 
 pipeline_params:
   use_mlp: True

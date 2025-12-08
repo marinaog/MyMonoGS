@@ -1,7 +1,7 @@
 import torch
 from torch import nn
 
-from basicgs.utils.registry import ARCH_REGISTRY
+from utils.registry import ARCH_REGISTRY
 
 
 @ARCH_REGISTRY.register()
