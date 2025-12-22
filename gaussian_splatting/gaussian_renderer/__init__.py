@@ -110,7 +110,7 @@ def render(
         else:
             shs = pc.get_features
     else:
-        colors_precomp = override_color
+        colors_precomp = pc.get_mlp_colors(viewpoint_camera)
 
     # Rasterize visible Gaussians to image, obtain their radii (on screen).
     if mask is not None:

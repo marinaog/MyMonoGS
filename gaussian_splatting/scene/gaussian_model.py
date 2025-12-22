@@ -30,9 +30,14 @@ from gaussian_splatting.utils.graphics_utils import BasicPointCloud, getWorld2Vi
 from gaussian_splatting.utils.sh_utils import RGB2SH
 from gaussian_splatting.utils.system_utils import mkdir_p
 
+from copy import deepcopy
+from utils.registry import ARCH_REGISTRY
+from utils.camera_utils import Camera
+from gaussian_splatting.utils.graphics_utils import getProjectionMatrix2
+@ARCH_REGISTRY.register()
 
 class GaussianModel:
-    def __init__(self, sh_degree: int, config=None):
+    def __init__(self, sh_degree: int, config=None, dataset=None):
         self.active_sh_degree = 0
         self.max_sh_degree = sh_degree
 
@@ -61,9 +66,17 @@ class GaussianModel:
         self.rotation_activation = torch.nn.functional.normalize
 
         self.config = config
+        self.dataset = dataset
         self.ply_input = None
 
         self.isotropic = False
+
+        # Init of MLP stuff
+        color_mlp_opt = config["mlp_opt_params"]["color_mlp_opt"]
+        network_type = color_mlp_opt.pop('type')
+        color_mlp_opt = deepcopy(color_mlp_opt)
+        net = ARCH_REGISTRY.get(network_type)(**color_mlp_opt)
+        self.color_mlp = net
 
     def build_covariance_from_scaling_rotation(
         self, scaling, scaling_modifier, rotation
@@ -590,6 +603,21 @@ class GaussianModel:
         if new_n_obs is not None:
             self.n_obs = torch.cat((self.n_obs, new_n_obs)).int()
 
+        if self.config["Dataset"]["type"] != "realsense":  # So no inference
+            with torch.no_grad():
+                cam_id = 0
+                projection_matrix = getProjectionMatrix2(
+                                    znear=0.01, zfar=100.0,
+                                    fx=self.dataset.fx, fy=self.dataset.fy,
+                                    cx=self.dataset.cx, cy=self.dataset.cy,
+                                    W=self.dataset.width, H=self.dataset.height,
+                                ).transpose(0, 1).cuda()
+                viewpoint_camera = Camera.init_from_dataset(self.dataset, cam_id, projection_matrix)
+                dir_pp = (self.get_xyz - viewpoint_camera.camera_center.repeat(self.get_xyz.shape[0], 1))
+                dir_pp_normalized = dir_pp/dir_pp.norm(dim=1, keepdim=True)
+                colors_precomp = torch.log(self.color_mlp(self.get_features, dir_pp_normalized, w_bias=False))
+                self._features_dc = nn.Parameter(self._features_dc - colors_precomp[:, None, :], requires_grad=True)
+
     def densify_and_split(self, grads, grad_threshold, scene_extent, N=2):
         n_init_points = self.get_xyz.shape[0]
         # Extract points that satisfy the gradient condition
@@ -693,3 +721,17 @@ class GaussianModel:
             viewspace_point_tensor.grad[update_filter, :2], dim=-1, keepdim=True
         )
         self.denom[update_filter] += 1
+
+    # MLP stuff
+    def get_mlp_color(self, viewpoint_camera):
+        # 1. Get Gaussian features (f_i)
+        f_i = self.get_features # DEBUG: check that the dimensions match
+
+        # 2. Get Viewing Direction/Pose (v)
+        dir_pp = (self.get_xyz - viewpoint_camera.camera_center.repeat(self.get_xyz.shape[0], 1))
+        v = dir_pp / dir_pp.norm(dim=1, keepdim=True) # Normalized viewing direction (d)
+
+        # 3. MLP Forward Pass
+        colors_precomp = self.color_mlp(f_i, v) 
+
+        return colors_precomp

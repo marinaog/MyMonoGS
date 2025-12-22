@@ -20,7 +20,7 @@ from utils.logging_utils import Log
 from utils.multiprocessing_utils import FakeQueue
 from utils.slam_backend import BackEnd
 from utils.slam_frontend import FrontEnd
-
+import utils.color_mlp_arch
 
 class SLAM:
     def __init__(self, config, save_dir=None):
@@ -55,11 +55,11 @@ class SLAM:
 
         model_params.sh_degree = 3 if self.use_spherical_harmonics else 0
 
-        self.gaussians = GaussianModel(model_params.sh_degree, config=self.config)
-        self.gaussians.init_lr(6.0)
         self.dataset = load_dataset(
             model_params, model_params.source_path, config=config
         )
+        self.gaussians = GaussianModel(model_params.sh_degree, config=self.config, dataset=self.dataset)
+        self.gaussians.init_lr(6.0)
 
         self.gaussians.training_setup(opt_params)
         bg_color = [0, 0, 0]
