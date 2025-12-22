@@ -104,7 +104,7 @@ class GaussianModel:
         # _features_dc[:, 0, :] -> (N, 3) (This is b_i)
         # _features_rest[:, 0, :] -> (N, L) (This is f_i)
         
-        return self._features_dc[:, 0, :], self._features_rest[:, 0, :]
+        return self._features_dc[:, :, 0], self._features_rest[:, :, 0]
 
     @property
     def get_opacity(self):
@@ -116,7 +116,7 @@ class GaussianModel:
 
     def get_mlp_color(self, viewpoint_camera):
         # 1. Get Gaussian features (f_i and b_i)
-        f_i, b_i = self.get_mlp_features() # Need to modify get_features to return f_i, b_i
+        f_i, b_i = self.get_mlp_features
 
         # 2. Get Viewing Direction/Pose (v)
         # You need the camera pose information v here.

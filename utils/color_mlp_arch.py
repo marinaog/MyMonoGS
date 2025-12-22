@@ -20,8 +20,8 @@ class TinyColorMLP(nn.Module):
             raise NotImplementedError
         assert dir_feats == 3 or dir_feats == 9 or dir_feats == 19
         self.dir_feats = dir_feats
-        feats = [in_feats+dir_feats] + mid_feats_list + [out_feats]
-        self.linears = nn.ModuleList([nn.Linear(feats[i], feats[i+1]) for i in range(len(feats)-2)])
+        feats = [in_feats+dir_feats] + mid_feats_list + [out_feats] # feats = [35] + [16, 16] + [3]
+        self.linears = nn.ModuleList([nn.Linear(feats[i], feats[i+1]) for i in range(len(feats)-2)]) # First layer: nn.Linear(35, 16)
         self.linears.append(nn.Linear(feats[-2], feats[-1], bias=False)) # no bias for the last linear
         self.final_act = eval(final_act)
         if final_bias is not None:
