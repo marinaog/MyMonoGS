@@ -58,6 +58,7 @@ class SLAM_GUI:
             self.q_main2vis = params_gui.q_main2vis
             self.q_vis2main = params_gui.q_vis2main
             self.pipe = params_gui.pipe
+            self.use_mlp = params_gui.use_mlp
 
         self.gaussian_nums = []
 

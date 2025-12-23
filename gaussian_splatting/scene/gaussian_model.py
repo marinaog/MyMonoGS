@@ -37,7 +37,7 @@ from gaussian_splatting.utils.graphics_utils import getProjectionMatrix2
 @ARCH_REGISTRY.register()
 
 class GaussianModel:
-    def __init__(self, sh_degree: int, config=None, dataset=None):
+    def __init__(self, sh_degree: int, config=None, dataset=None, use_mlp=False):
         self.active_sh_degree = 0
         self.max_sh_degree = sh_degree
 
@@ -70,17 +70,16 @@ class GaussianModel:
         self.ply_input = None
 
         self.isotropic = False
-        self.use_mlp = False
+        self.use_mlp = use_mlp
 
         # Init of MLP stuff
-        if config.get("mlp_opt_params"):
+        if use_mlp:
             color_mlp_opt = config["mlp_opt_params"]["color_mlp_opt"]
             network_type = color_mlp_opt.pop('type')
             color_mlp_opt = deepcopy(color_mlp_opt)
             net = ARCH_REGISTRY.get(network_type)(**color_mlp_opt)
             self.color_mlp = net
             self.color_mlp.to('cuda')
-            self.use_mlp = True
 
     def build_covariance_from_scaling_rotation(
         self, scaling, scaling_modifier, rotation
@@ -621,7 +620,7 @@ class GaussianModel:
         if new_n_obs is not None:
             self.n_obs = torch.cat((self.n_obs, new_n_obs)).int()
 
-        if self.config["Dataset"]["type"] != "realsense" and self.config.get("mlp_opt_params"):  # So no inference and mlp being use
+        if self.config["Dataset"]["type"] != "realsense" and self.use_mlp:  # So no inference and mlp being use
             with torch.no_grad():
                 cam_id = 0
                 projection_matrix = getProjectionMatrix2(
@@ -743,7 +742,7 @@ class GaussianModel:
     # MLP stuff
     def get_mlp_color(self, viewpoint_camera):
         # 1. Get Gaussian features (f_i)
-        f_i = self.get_features_mlp # DEBUG: check that the dimensions match
+        f_i = self.get_features_mlp
 
         # 2. Get Viewing Direction/Pose (v)
         dir_pp = (self.get_xyz - viewpoint_camera.camera_center.repeat(self.get_xyz.shape[0], 1))

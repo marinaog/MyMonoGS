@@ -96,7 +96,11 @@ class GaussianPacket:
             self.get_scaling = gaussians.get_scaling.detach().clone()
             self.get_rotation = gaussians.get_rotation.detach().clone()
             self.max_sh_degree = gaussians.max_sh_degree
-            self.get_features = gaussians.get_features.detach().clone()
+            if gaussians.use_mlp:
+                f_i, b_i = gaussians.get_features_mlp
+                self.get_features = (f_i.detach().clone(), b_i.detach().clone())        
+            else:
+                self.get_features = gaussians.get_features.detach().clone()
 
             self._rotation = gaussians._rotation.detach().clone()
             self.rotation_activation = torch.nn.functional.normalize
@@ -167,9 +171,11 @@ class ParamsGUI:
         gaussians=None,
         q_main2vis=None,
         q_vis2main=None,
+        use_mlp=False,
     ):
         self.pipe = pipe
         self.background = background
         self.gaussians = gaussians
         self.q_main2vis = q_main2vis
         self.q_vis2main = q_vis2main
+        self.use_mlp = use_mlp

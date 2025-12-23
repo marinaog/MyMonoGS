@@ -39,7 +39,7 @@ class SLAM:
             opt_params,
             pipeline_params,
         )
-
+        self.use_mlp = bool(config.get("mlp_opt_params"))
         self.live_mode = self.config["Dataset"]["type"] == "realsense"
         self.monocular = self.config["Dataset"]["sensor_type"] == "monocular"
         self.use_spherical_harmonics = self.config["Training"]["spherical_harmonics"]
@@ -58,7 +58,7 @@ class SLAM:
         self.dataset = load_dataset(
             model_params, model_params.source_path, config=config
         )
-        self.gaussians = GaussianModel(model_params.sh_degree, config=self.config, dataset=self.dataset)
+        self.gaussians = GaussianModel(model_params.sh_degree, config=self.config, dataset=self.dataset, use_mlp=self.use_mlp)
         self.gaussians.init_lr(6.0)
 
         self.gaussians.training_setup(opt_params)
@@ -102,6 +102,7 @@ class SLAM:
             gaussians=self.gaussians,
             q_main2vis=q_main2vis,
             q_vis2main=q_vis2main,
+            use_mlp=self.use_mlp,
         )
 
         backend_process = mp.Process(target=self.backend.run)
