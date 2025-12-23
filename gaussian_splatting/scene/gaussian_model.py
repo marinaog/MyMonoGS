@@ -70,13 +70,17 @@ class GaussianModel:
         self.ply_input = None
 
         self.isotropic = False
+        self.use_mlp = False
 
         # Init of MLP stuff
-        color_mlp_opt = config["mlp_opt_params"]["color_mlp_opt"]
-        network_type = color_mlp_opt.pop('type')
-        color_mlp_opt = deepcopy(color_mlp_opt)
-        net = ARCH_REGISTRY.get(network_type)(**color_mlp_opt)
-        self.color_mlp = net
+        if config.get("mlp_opt_params"):
+            color_mlp_opt = config["mlp_opt_params"]["color_mlp_opt"]
+            network_type = color_mlp_opt.pop('type')
+            color_mlp_opt = deepcopy(color_mlp_opt)
+            net = ARCH_REGISTRY.get(network_type)(**color_mlp_opt)
+            self.color_mlp = net
+            self.color_mlp.to('cuda')
+            self.use_mlp = True
 
     def build_covariance_from_scaling_rotation(
         self, scaling, scaling_modifier, rotation
@@ -104,6 +108,12 @@ class GaussianModel:
         features_rest = self._features_rest
         return torch.cat((features_dc, features_rest), dim=1)
 
+    @property
+    def get_features_mlp(self):
+        features_dc = self._features_dc[:, 0, :]
+        features_rest = self._features_rest[:, 0, :]
+        return features_dc, features_rest
+    
     @property
     def get_opacity(self):
         return self.opacity_activation(self._opacity)
@@ -225,9 +235,16 @@ class GaussianModel:
         new_features_dc = nn.Parameter(
             features[:, :, 0:1].transpose(1, 2).contiguous().requires_grad_(True)
         )
-        new_features_rest = nn.Parameter(
-            features[:, :, 1:].transpose(1, 2).contiguous().requires_grad_(True)
-        )
+        
+        if self.use_mlp:
+            color_feat_length = self.config['mlp_opt_params']['color_feat_opt']['feat_len']
+            color_feat_sigma = self.config['mlp_opt_params']['color_feat_opt']['feat_init_sigma']
+            new_features_rest = nn.Parameter(
+            torch.randn((features.shape[0], 1, color_feat_length)) * color_feat_sigma, requires_grad=True)
+        else:
+            new_features_rest = nn.Parameter(
+                features[:, :, 1:].transpose(1, 2).contiguous().requires_grad_(True)
+            )
         new_scaling = nn.Parameter(scales.requires_grad_(True))
         new_rotation = nn.Parameter(rots.requires_grad_(True))
         new_opacity = nn.Parameter(opacities.requires_grad_(True))
@@ -586,7 +603,8 @@ class GaussianModel:
             "scaling": new_scaling,
             "rotation": new_rotation,
         }
-
+        for key in d:
+            d[key] = d[key].cuda()
         optimizable_tensors = self.cat_tensors_to_optimizer(d)
         self._xyz = optimizable_tensors["xyz"]
         self._features_dc = optimizable_tensors["f_dc"]
@@ -603,7 +621,7 @@ class GaussianModel:
         if new_n_obs is not None:
             self.n_obs = torch.cat((self.n_obs, new_n_obs)).int()
 
-        if self.config["Dataset"]["type"] != "realsense":  # So no inference
+        if self.config["Dataset"]["type"] != "realsense" and self.config.get("mlp_opt_params"):  # So no inference and mlp being use
             with torch.no_grad():
                 cam_id = 0
                 projection_matrix = getProjectionMatrix2(
@@ -615,7 +633,7 @@ class GaussianModel:
                 viewpoint_camera = Camera.init_from_dataset(self.dataset, cam_id, projection_matrix)
                 dir_pp = (self.get_xyz - viewpoint_camera.camera_center.repeat(self.get_xyz.shape[0], 1))
                 dir_pp_normalized = dir_pp/dir_pp.norm(dim=1, keepdim=True)
-                colors_precomp = torch.log(self.color_mlp(self.get_features, dir_pp_normalized, w_bias=False))
+                colors_precomp = torch.log(self.color_mlp(self.get_features_mlp, dir_pp_normalized, w_bias=False))
                 self._features_dc = nn.Parameter(self._features_dc - colors_precomp[:, None, :], requires_grad=True)
 
     def densify_and_split(self, grads, grad_threshold, scene_extent, N=2):
@@ -725,7 +743,7 @@ class GaussianModel:
     # MLP stuff
     def get_mlp_color(self, viewpoint_camera):
         # 1. Get Gaussian features (f_i)
-        f_i = self.get_features # DEBUG: check that the dimensions match
+        f_i = self.get_features_mlp # DEBUG: check that the dimensions match
 
         # 2. Get Viewing Direction/Pose (v)
         dir_pp = (self.get_xyz - viewpoint_camera.camera_center.repeat(self.get_xyz.shape[0], 1))
