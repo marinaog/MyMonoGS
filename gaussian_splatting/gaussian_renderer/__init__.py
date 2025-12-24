@@ -95,6 +95,7 @@ def render(
     # from SHs in Python, do it. If not, then SH -> RGB conversion will be done by rasterizer.
     shs = None
     if not pc.use_mlp:
+        colors_precomp = None
         if pipe.convert_SHs_python:
             shs_view = pc.get_features.transpose(1, 2).view(
                 -1, 3, (pc.max_sh_degree + 1) ** 2

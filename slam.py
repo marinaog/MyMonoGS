@@ -247,7 +247,8 @@ if __name__ == "__main__":
             dataset_group = "_".join(path_parts[:-1])  # "datasets_rawslam"
 
             suffix = "_raw" if config["Dataset"].get("raw", False) else "_srgb"
-            suffix += "_loss" if config["Training"]["loss"] == "rawnerf" else ""
+            if config["Training"].get("loss"):
+                suffix += "_loss" if config["Training"]["loss"].get("rawnerf", False) else ""
             save_dir_base = os.path.join(base_results_dir, f"{dataset_group}/{scene_name}{suffix}")
 
             save_dir = save_dir_base

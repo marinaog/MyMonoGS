@@ -133,7 +133,7 @@ def get_loss_mapping_rgbd(config, image, depth, viewpoint, initialization=False)
     rgb_pixel_mask = (gt_image.sum(dim=0) > rgb_boundary_threshold).view(*depth.shape)
     depth_pixel_mask = (gt_depth > 0.01).view(*depth.shape)
 
-    if config["Training"]["loss"] == "rawnerf":
+    if config["Training"].get("loss") and config["Training"]["loss"] == "rawnerf":
         rgb_render_clip = torch.clamp(image, max=1.0)
         resid_sq_clip = (rgb_render_clip - gt_image) ** 2
         resid_sq_clip_masked = resid_sq_clip * rgb_pixel_mask
