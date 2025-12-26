@@ -86,8 +86,12 @@ class GaussianPacket:
         keyframes=None,
         finish=False,
         kf_window=None,
+        use_mlp=False,
+        mlp_colors=None,
     ):
         self.has_gaussians = False
+        self.use_mlp = use_mlp
+        self.mlp_colors = mlp_colors
         if gaussians is not None:
             self.has_gaussians = True
             self.get_xyz = gaussians.get_xyz.detach().clone()
@@ -96,10 +100,7 @@ class GaussianPacket:
             self.get_scaling = gaussians.get_scaling.detach().clone()
             self.get_rotation = gaussians.get_rotation.detach().clone()
             self.max_sh_degree = gaussians.max_sh_degree
-            if gaussians.use_mlp:
-                f_i, b_i = gaussians.get_features_mlp
-                self.get_features = (f_i.detach().clone(), b_i.detach().clone())        
-            else:
+            if not use_mlp:
                 self.get_features = gaussians.get_features.detach().clone()
 
             self._rotation = gaussians._rotation.detach().clone()

@@ -109,7 +109,12 @@ def render(
         else:
             shs = pc.get_features
     else:
-        colors_precomp = pc.get_mlp_color(viewpoint_camera)
+        if hasattr(pc, 'get_mlp_color'):
+            # We are in the Frontend/Backend process (Full Model)
+            colors_precomp = pc.get_mlp_color(viewpoint_camera)
+        elif hasattr(pc, 'mlp_colors') and pc.mlp_colors is not None:
+            # We are in the GUI process (Packet)
+            colors_precomp = pc.mlp_colors
 
     # Rasterize visible Gaussians to image, obtain their radii (on screen).
     if mask is not None:

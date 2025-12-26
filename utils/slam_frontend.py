@@ -43,6 +43,8 @@ class FrontEnd(mp.Process):
         self.device = "cuda:0"
         self.pause = False
 
+        self.use_mlp = bool(config.get("mlp_opt_params"))
+
     def set_hyperparams(self):
         self.save_dir = self.config["Results"]["save_dir"]
         self.save_results = self.config["Results"]["save_results"]
@@ -180,6 +182,7 @@ class FrontEnd(mp.Process):
                 converged = update_pose(viewpoint)
 
             if tracking_itr % 10 == 0:
+                colors_for_gui = self.gaussians.get_mlp_color(viewpoint)
                 self.q_main2vis.put(
                     gui_utils.GaussianPacket(
                         current_frame=viewpoint,
@@ -187,6 +190,8 @@ class FrontEnd(mp.Process):
                         gtdepth=viewpoint.depth
                         if not self.monocular
                         else np.zeros((viewpoint.image_height, viewpoint.image_width)),
+                        use_mlp=self.use_mlp,
+                        mlp_colors=colors_for_gui.detach().clone(),
                     )
                 )
             if converged:
@@ -393,13 +398,16 @@ class FrontEnd(mp.Process):
                 current_window_dict = {}
                 current_window_dict[self.current_window[0]] = self.current_window[1:]
                 keyframes = [self.cameras[kf_idx] for kf_idx in self.current_window]
-
+                
+                colors_for_gui = self.gaussians.get_mlp_color(viewpoint)
                 self.q_main2vis.put(
                     gui_utils.GaussianPacket(
                         gaussians=clone_obj(self.gaussians),
                         current_frame=viewpoint,
                         keyframes=keyframes,
                         kf_window=current_window_dict,
+                        use_mlp=self.use_mlp,
+                        mlp_colors=colors_for_gui.detach().clone(),
                     )
                 )
 
