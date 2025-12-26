@@ -51,7 +51,12 @@ class SLAM:
         self.raw = False
         if 'raw' in self.config['Dataset'].keys() and self.config['Dataset']['raw']:
             self.raw = True
-            print(f'Using 16 bits raw data, a {config['Training']['loss']} loss and alpha = {config['Training']['alpha']}')
+            loss_type = 'l1'
+            if 'Training' in config.keys() and config['Training'].get('loss'):
+                loss_type = config['Training']['loss']
+                print(f'Using 16 bits raw data, a {loss_type} loss and alpha = {config['Training']['alpha']}')
+        else:
+            print(f'Using 16 bits raw data, a {loss_type} loss')
 
         model_params.sh_degree = 3 if self.use_spherical_harmonics else 0
 
@@ -248,7 +253,7 @@ if __name__ == "__main__":
 
             suffix = "_raw" if config["Dataset"].get("raw", False) else "_srgb"
             if config["Training"].get("loss"):
-                suffix += "_loss" if config["Training"]["loss"].get("rawnerf", False) else ""
+                suffix += "_loss" if config["Training"]["loss"] == "rawnerf" else ""
             save_dir_base = os.path.join(base_results_dir, f"{dataset_group}/{scene_name}{suffix}")
 
             save_dir = save_dir_base
