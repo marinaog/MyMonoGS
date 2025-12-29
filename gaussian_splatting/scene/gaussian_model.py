@@ -193,7 +193,11 @@ class GaussianModel:
         self.ply_input = pcd
 
         fused_point_cloud = torch.from_numpy(np.asarray(pcd.points)).float().cuda()
-        fused_color = RGB2SH(torch.from_numpy(np.asarray(pcd.colors)).float().cuda())
+        colors_raw = torch.from_numpy(np.asarray(pcd.colors)).float().cuda()
+        if self.use_mlp:
+            fused_color = torch.log(colors_raw + 1e-6)
+        else:
+            fused_color = RGB2SH(colors_raw)
         features = (
             torch.zeros((fused_color.shape[0], 3, (self.max_sh_degree + 1) ** 2))
             .float()
