@@ -6,7 +6,7 @@ import torch.multiprocessing as mp
 from tqdm import tqdm
 
 from gaussian_splatting.gaussian_renderer import render
-from gaussian_splatting.utils.loss_utils import l1_loss, ssim
+from gaussian_splatting.utils.loss_utils import l1_loss, rawnerf_loss, ssim
 from utils.logging_utils import Log
 from utils.multiprocessing_utils import clone_obj
 from utils.pose_utils import update_pose
@@ -341,10 +341,14 @@ class BackEnd(mp.Process):
             )
 
             gt_image = viewpoint_cam.original_image.cuda()
-            Ll1 = l1_loss(image, gt_image)
-            loss = (1.0 - self.opt_params.lambda_dssim) * (
-                Ll1
-            ) + self.opt_params.lambda_dssim * (1.0 - ssim(image, gt_image))
+            if self.config["Training"].get("loss") and self.config["Training"]["loss"] == "rawnerf":
+                loss = rawnerf_loss(image, gt_image)
+            
+            else:
+                Ll1 = l1_loss(image, gt_image)
+                loss = (1.0 - self.opt_params.lambda_dssim) * (
+                    Ll1
+                ) + self.opt_params.lambda_dssim * (1.0 - ssim(image, gt_image))
             loss.backward()
             with torch.no_grad():
                 self.gaussians.max_radii2D[visibility_filter] = torch.max(
