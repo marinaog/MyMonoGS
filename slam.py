@@ -196,6 +196,10 @@ class SLAM:
             )
             wandb.log({"Metrics": metrics_table})
             save_gaussians(self.gaussians, self.save_dir, "final_after_opt", final=True)
+            if self.use_mlp:
+                mlp_save_path = os.path.join(self.save_dir, "color_mlp.pth")
+                torch.save(self.gaussians.color_mlp.state_dict(), mlp_save_path)
+                Log(f"Saved MLP weights to {mlp_save_path}")
 
         backend_queue.put(["stop"])
         backend_process.join()
