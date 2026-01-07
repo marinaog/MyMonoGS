@@ -182,7 +182,9 @@ class FrontEnd(mp.Process):
                 converged = update_pose(viewpoint)
 
             if tracking_itr % 10 == 0:
-                colors_for_gui = self.gaussians.get_mlp_color(viewpoint)
+                colors_for_gui = None
+                if self.use_mlp:
+                    colors_for_gui = self.gaussians.get_mlp_color(viewpoint).detach().clone()
                 self.q_main2vis.put(
                     gui_utils.GaussianPacket(
                         current_frame=viewpoint,
@@ -191,7 +193,7 @@ class FrontEnd(mp.Process):
                         if not self.monocular
                         else np.zeros((viewpoint.image_height, viewpoint.image_width)),
                         use_mlp=self.use_mlp,
-                        mlp_colors=colors_for_gui.detach().clone(),
+                        mlp_colors=colors_for_gui,
                     )
                 )
             if converged:
