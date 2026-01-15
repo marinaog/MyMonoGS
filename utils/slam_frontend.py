@@ -400,8 +400,10 @@ class FrontEnd(mp.Process):
                 current_window_dict = {}
                 current_window_dict[self.current_window[0]] = self.current_window[1:]
                 keyframes = [self.cameras[kf_idx] for kf_idx in self.current_window]
-                
-                colors_for_gui = self.gaussians.get_mlp_color(viewpoint)
+
+                colors_for_gui = None
+                if self.use_mlp:
+                    colors_for_gui = self.gaussians.get_mlp_color(viewpoint).detach().clone()
                 self.q_main2vis.put(
                     gui_utils.GaussianPacket(
                         gaussians=clone_obj(self.gaussians),
@@ -409,7 +411,7 @@ class FrontEnd(mp.Process):
                         keyframes=keyframes,
                         kf_window=current_window_dict,
                         use_mlp=self.use_mlp,
-                        mlp_colors=colors_for_gui.detach().clone(),
+                        mlp_colors=colors_for_gui,
                     )
                 )
 
