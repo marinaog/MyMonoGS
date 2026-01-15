@@ -242,9 +242,9 @@ if __name__ == "__main__":
         # config["Results"]["use_gui"] = False
         Log("\teval_rendering=True")
         config["Results"]["eval_rendering"] = True
-        Log("\tuse_wandb=True")
-        config["Results"]["use_wandb"] = True
-
+        # Log("\tuse_wandb=True")
+        # config["Results"]["use_wandb"] = True
+    Log("\tConfig:", config)
     if config["Results"]["save_results"]:
         base_results_dir = config["Results"]["save_dir"]
         mkdir_p(base_results_dir)
