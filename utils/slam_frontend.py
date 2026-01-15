@@ -102,11 +102,10 @@ class FrontEnd(mp.Process):
                         invalid_depth_mask, std * 0.5, std * 0.2
                     )
 
-                initial_depth[~valid_rgb] = 0  # Ignore the invalid rgb pixels
+                initial_depth[~valid_rgb] = 0
             return initial_depth.cpu().numpy()[0]
-        # use the observed depth
         initial_depth = torch.from_numpy(viewpoint.depth).unsqueeze(0)
-        initial_depth[~valid_rgb.cpu()] = 0  # Ignore the invalid rgb pixels
+        initial_depth[~valid_rgb.cpu()] = 0
         return initial_depth[0].numpy()
 
     def initialize(self, cur_frame_idx, viewpoint):
@@ -115,11 +114,9 @@ class FrontEnd(mp.Process):
         self.iteration_count = 0
         self.occ_aware_visibility = {}
         self.current_window = []
-        # remove everything from the queues
         while not self.backend_queue.empty():
             self.backend_queue.get()
 
-        # Initialise the frame at the ground truth pose
         viewpoint.update_RT(viewpoint.R_gt, viewpoint.T_gt)
 
         self.kf_indices = []
@@ -236,13 +233,11 @@ class FrontEnd(mp.Process):
     ):
         N_dont_touch = 2
         window = [cur_frame_idx] + window
-        # remove frames which has little overlap with the current frame
         curr_frame = self.cameras[cur_frame_idx]
         to_remove = []
         removed_frame = None
         for i in range(N_dont_touch, len(window)):
             kf_idx = window[i]
-            # szymkiewicz–simpson coefficient
             intersection = torch.logical_and(
                 cur_frame_visibility_filter, occ_aware_visibility[kf_idx]
             ).count_nonzero()
@@ -267,7 +262,6 @@ class FrontEnd(mp.Process):
         kf_0_WC = torch.linalg.inv(getWorld2View2(curr_frame.R, curr_frame.T))
 
         if len(window) > self.config["Training"]["window_size"]:
-            # we need to find the keyframe to remove...
             inv_dist = []
             for i in range(N_dont_touch, len(window)):
                 inv_dists = []
@@ -323,185 +317,115 @@ class FrontEnd(mp.Process):
     def run(self):
         cur_frame_idx = 0
         projection_matrix = getProjectionMatrix2(
-            znear=0.01,
-            zfar=100.0,
-            fx=self.dataset.fx,
-            fy=self.dataset.fy,
-            cx=self.dataset.cx,
-            cy=self.dataset.cy,
-            W=self.dataset.width,
-            H=self.dataset.height,
-        ).transpose(0, 1)
-        projection_matrix = projection_matrix.to(device=self.device)
+            znear=0.01, zfar=100.0, fx=self.dataset.fx, fy=self.dataset.fy,
+            cx=self.dataset.cx, cy=self.dataset.cy, W=self.dataset.width, H=self.dataset.height,
+        ).transpose(0, 1).to(device=self.device)
+        
         tic = torch.cuda.Event(enable_timing=True)
         toc = torch.cuda.Event(enable_timing=True)
 
         while True:
-            if self.q_vis2main.empty():
-                if self.pause:
-                    continue
-            else:
+            if not self.q_vis2main.empty():
                 data_vis2main = self.q_vis2main.get()
                 self.pause = data_vis2main.flag_pause
                 if self.pause:
                     self.backend_queue.put(["pause"])
-                    continue
                 else:
                     self.backend_queue.put(["unpause"])
-
-            if self.frontend_queue.empty():
-                tic.record()
-                if cur_frame_idx >= len(self.dataset):
-                    if self.save_results:
-                        eval_ate(
-                            self.cameras,
-                            self.kf_indices,
-                            self.save_dir,
-                            0,
-                            final=True,
-                            monocular=self.monocular,
-                        )
-                        save_gaussians(
-                            self.gaussians, self.save_dir, "final", final=True
-                        )
-                    break
-
-                if self.requested_init:
-                    time.sleep(0.01)
-                    continue
-
-                if self.single_thread and self.requested_keyframe > 0:
-                    time.sleep(0.01)
-                    continue
-
-                if not self.initialized and self.requested_keyframe > 0:
-                    time.sleep(0.01)
-                    continue
-                viewpoint = Camera.init_from_dataset(
-                    self.dataset, cur_frame_idx, projection_matrix
-                )
-                viewpoint.compute_grad_mask(self.config)
-
-                self.cameras[cur_frame_idx] = viewpoint
-
-                if self.reset:
-                    self.initialize(cur_frame_idx, viewpoint)
-                    self.current_window.append(cur_frame_idx)
-                    cur_frame_idx += 1
-                    continue
-
-                self.initialized = self.initialized or (
-                    len(self.current_window) == self.window_size
-                )
-
-                # Tracking
-                render_pkg = self.tracking(cur_frame_idx, viewpoint)
-
-                current_window_dict = {}
-                current_window_dict[self.current_window[0]] = self.current_window[1:]
-                keyframes = [self.cameras[kf_idx] for kf_idx in self.current_window]
-
-                colors_for_gui = None
-                if self.use_mlp:
-                    colors_for_gui = self.gaussians.get_mlp_color(viewpoint).detach().clone()
-                self.q_main2vis.put(
-                    gui_utils.GaussianPacket(
-                        gaussians=clone_obj(self.gaussians),
-                        current_frame=viewpoint,
-                        keyframes=keyframes,
-                        kf_window=current_window_dict,
-                        use_mlp=self.use_mlp,
-                        mlp_colors=colors_for_gui,
-                    )
-                )
-
-                if self.requested_keyframe > 0:
-                    self.cleanup(cur_frame_idx)
-                    cur_frame_idx += 1
-                    continue
-
-                last_keyframe_idx = self.current_window[0]
-                check_time = (cur_frame_idx - last_keyframe_idx) >= self.kf_interval
-                curr_visibility = (render_pkg["n_touched"] > 0).long()
-                create_kf = self.is_keyframe(
-                    cur_frame_idx,
-                    last_keyframe_idx,
-                    curr_visibility,
-                    self.occ_aware_visibility,
-                )
-                if len(self.current_window) < self.window_size:
-                    union = torch.logical_or(
-                        curr_visibility, self.occ_aware_visibility[last_keyframe_idx]
-                    ).count_nonzero()
-                    intersection = torch.logical_and(
-                        curr_visibility, self.occ_aware_visibility[last_keyframe_idx]
-                    ).count_nonzero()
-                    point_ratio = intersection / union
-                    create_kf = (
-                        check_time
-                        and point_ratio < self.config["Training"]["kf_overlap"]
-                    )
-                if self.single_thread:
-                    create_kf = check_time and create_kf
-                if create_kf:
-                    self.current_window, removed = self.add_to_window(
-                        cur_frame_idx,
-                        curr_visibility,
-                        self.occ_aware_visibility,
-                        self.current_window,
-                    )
-                    if self.monocular and not self.initialized and removed is not None:
-                        self.reset = True
-                        Log(
-                            "Keyframes lacks sufficient overlap to initialize the map, resetting."
-                        )
-                        continue
-                    depth_map = self.add_new_keyframe(
-                        cur_frame_idx,
-                        depth=render_pkg["depth"],
-                        opacity=render_pkg["opacity"],
-                        init=False,
-                    )
-                    self.request_keyframe(
-                        cur_frame_idx, viewpoint, self.current_window, depth_map
-                    )
-                else:
-                    self.cleanup(cur_frame_idx)
-                cur_frame_idx += 1
-
-                if (
-                    self.save_results
-                    and self.save_trj
-                    and create_kf
-                    and len(self.kf_indices) % self.save_trj_kf_intv == 0
-                ):
-                    Log("Evaluating ATE at frame: ", cur_frame_idx)
-                    eval_ate(
-                        self.cameras,
-                        self.kf_indices,
-                        self.save_dir,
-                        cur_frame_idx,
-                        monocular=self.monocular,
-                    )
-                toc.record()
-                torch.cuda.synchronize()
-                if create_kf:
-                    # throttle at 3fps when keyframe is added
-                    duration = tic.elapsed_time(toc)
-                    time.sleep(max(0.01, 1.0 / 3.0 - duration / 1000))
-            else:
+                    
+            while not self.frontend_queue.empty():
                 data = self.frontend_queue.get()
-                if data[0] == "sync_backend":
+                if data[0] == "log_metrics":
+                    import wandb
+                    if wandb.run is not None:
+                        wandb.log(data[1])
+                elif data[0] == "sync_backend":
                     self.sync_backend(data)
-
                 elif data[0] == "keyframe":
                     self.sync_backend(data)
                     self.requested_keyframe -= 1
-
                 elif data[0] == "init":
                     self.sync_backend(data)
                     self.requested_init = False
-
                 elif data[0] == "stop":
                     Log("Frontend Stopped.")
-                    break
+                    return
+
+            if self.pause:
+                time.sleep(0.01)
+                continue
+
+            tic.record()
+            if cur_frame_idx >= len(self.dataset):
+                if self.save_results:
+                    eval_ate(self.cameras, self.kf_indices, self.save_dir, 0, final=True, monocular=self.monocular)
+                    save_gaussians(self.gaussians, self.save_dir, "final", final=True)
+                break
+
+            if self.requested_init or (self.single_thread and self.requested_keyframe > 0) or (not self.initialized and self.requested_keyframe > 0):
+                time.sleep(0.01)
+                continue
+
+            viewpoint = Camera.init_from_dataset(self.dataset, cur_frame_idx, projection_matrix)
+            viewpoint.compute_grad_mask(self.config)
+            self.cameras[cur_frame_idx] = viewpoint
+
+            if self.reset:
+                self.initialize(cur_frame_idx, viewpoint)
+                self.current_window.append(cur_frame_idx)
+                cur_frame_idx += 1
+                continue
+
+            self.initialized = self.initialized or (len(self.current_window) == self.window_size)
+            render_pkg = self.tracking(cur_frame_idx, viewpoint)
+
+            current_window_dict = {self.current_window[0]: self.current_window[1:]}
+            keyframes = [self.cameras[kf_idx] for kf_idx in self.current_window]
+            colors_for_gui = self.gaussians.get_mlp_color(viewpoint).detach().clone() if self.use_mlp else None
+            
+            self.q_main2vis.put(gui_utils.GaussianPacket(
+                gaussians=clone_obj(self.gaussians), current_frame=viewpoint,
+                keyframes=keyframes, kf_window=current_window_dict,
+                use_mlp=self.use_mlp, mlp_colors=colors_for_gui,
+            ))
+
+            if self.requested_keyframe > 0:
+                self.cleanup(cur_frame_idx)
+                cur_frame_idx += 1
+                continue
+
+            last_keyframe_idx = self.current_window[0]
+            check_time = (cur_frame_idx - last_keyframe_idx) >= self.kf_interval
+            curr_visibility = (render_pkg["n_touched"] > 0).long()
+            create_kf = self.is_keyframe(cur_frame_idx, last_keyframe_idx, curr_visibility, self.occ_aware_visibility)
+            
+            if len(self.current_window) < self.window_size:
+                union = torch.logical_or(curr_visibility, self.occ_aware_visibility[last_keyframe_idx]).count_nonzero()
+                intersection = torch.logical_and(curr_visibility, self.occ_aware_visibility[last_keyframe_idx]).count_nonzero()
+                create_kf = check_time and (intersection / union < self.config["Training"]["kf_overlap"])
+            
+            if self.single_thread:
+                create_kf = check_time and create_kf
+                
+            if create_kf:
+                self.current_window, removed = self.add_to_window(cur_frame_idx, curr_visibility, self.occ_aware_visibility, self.current_window)
+                if self.monocular and not self.initialized and removed is not None:
+                    self.reset = True
+                    Log("Keyframes lacks sufficient overlap to initialize the map, resetting.")
+                    continue
+                depth_map = self.add_new_keyframe(cur_frame_idx, depth=render_pkg["depth"], opacity=render_pkg["opacity"], init=False)
+                self.request_keyframe(cur_frame_idx, viewpoint, self.current_window, depth_map)
+            else:
+                self.cleanup(cur_frame_idx)
+            
+            cur_frame_idx += 1
+
+            if self.save_results and self.save_trj and create_kf and len(self.kf_indices) % self.save_trj_kf_intv == 0:
+                Log("Evaluating ATE at frame: ", cur_frame_idx)
+                eval_ate(self.cameras, self.kf_indices, self.save_dir, cur_frame_idx, monocular=self.monocular)
+            
+            toc.record()
+            torch.cuda.synchronize()
+            if create_kf:
+                duration = tic.elapsed_time(toc)
+                time.sleep(max(0.01, 1.0 / 3.0 - duration / 1000))

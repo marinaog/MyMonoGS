@@ -174,7 +174,10 @@ class SLAM:
                     time.sleep(0.01)
                     continue
                 data = frontend_queue.get()
-                if data[0] == "sync_backend" and frontend_queue.empty():
+                if data[0] == "log_metrics":
+                    wandb.log(data[1])
+                    continue
+                if data[0] == "sync_backend":
                     gaussians = data[1]
                     self.gaussians = gaussians
                     break
@@ -238,12 +241,8 @@ if __name__ == "__main__":
         Log("Following config will be overriden")
         Log("\tsave_results=True")
         config["Results"]["save_results"] = True
-        # Log("\tuse_gui=False")
-        # config["Results"]["use_gui"] = False
         Log("\teval_rendering=True")
         config["Results"]["eval_rendering"] = True
-        # Log("\tuse_wandb=True")
-        # config["Results"]["use_wandb"] = True
     Log("\tConfig:", config)
     if config["Results"]["save_results"]:
         base_results_dir = config["Results"]["save_dir"]
@@ -287,20 +286,25 @@ if __name__ == "__main__":
                 project="MonoGS",
                 name=f"datasets_rawslam/{args.forcename}",
                 config=config,
-                mode=None if config["Results"]["use_wandb"] else "disabled",
+                # mode="offline",
             )
         else:
             run = wandb.init(
                 project="MonoGS",
                 name=f"{dataset_group}/{scene_name}{suffix}_{version}",
                 config=config,
-                mode=None if config["Results"]["use_wandb"] else "disabled",
+                # mode="offline",
             )
-        wandb.define_metric("frame_idx")
-        wandb.define_metric("ate*", step_metric="frame_idx")
-        wandb.define_metric("PSNR*", step_metric="frame_idx")
-        wandb.define_metric("iteration_count")
-        wandb.define_metric("loss_rgb", step_metric="iteration_count")
+        
+        if config["Results"]["use_wandb"]:
+            os.environ["WANDB_RUN_ID"] = run.id
+            os.environ["WANDB_RESUME"] = "must"
+
+            wandb.define_metric("frame_idx")
+            wandb.define_metric("ate*", step_metric="frame_idx")
+            wandb.define_metric("PSNR*", step_metric="frame_idx")
+            wandb.define_metric("backend/iteration_count")
+            wandb.define_metric("backend/loss_rgb", step_metric="backend/iteration_count")
 
 
 
