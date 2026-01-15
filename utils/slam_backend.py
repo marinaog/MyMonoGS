@@ -350,13 +350,14 @@ class BackEnd(mp.Process):
 
             gt_image = viewpoint_cam.original_image.cuda()
             if self.config["Training"].get("loss") and self.config["Training"]["loss"] == "rawnerf":
-                loss = rawnerf_loss(image, gt_image)
+                rgb_boundary_threshold = self.config["Training"]["rgb_boundary_threshold"]
+                mask = (gt_image.sum(dim=0) > rgb_boundary_threshold)
+                Lrawnerf = rawnerf_loss(image, gt_image, mask=mask)
+                loss = (1.0 - self.opt_params.lambda_dssim) * (Lrawnerf) + self.opt_params.lambda_dssim * (1.0 - ssim(image, gt_image))
             
             else:
                 Ll1 = l1_loss(image, gt_image)
-                loss = (1.0 - self.opt_params.lambda_dssim) * (
-                    Ll1
-                ) + self.opt_params.lambda_dssim * (1.0 - ssim(image, gt_image))
+                loss = (1.0 - self.opt_params.lambda_dssim) * (Ll1) + self.opt_params.lambda_dssim * (1.0 - ssim(image, gt_image))
             loss.backward()
             with torch.no_grad():
                 self.gaussians.max_radii2D[visibility_filter] = torch.max(
