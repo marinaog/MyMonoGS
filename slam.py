@@ -305,9 +305,13 @@ if __name__ == "__main__":
             wandb.define_metric("PSNR*", step_metric="frame_idx")
             wandb.define_metric("backend/iteration_count")
             wandb.define_metric("backend/loss_rgb", step_metric="backend/iteration_count")
+            wandb.define_metric("debug/mlp_grad_norm", step_metric="backend/iteration_count")
 
+            wandb.define_metric("frontend/loss_tracking", step_metric="frame_idx")
+            wandb.define_metric("frontend/frame_idx", step_metric="frame_idx")
 
-
+            wandb.define_metric("refinement/loss", step_metric="refinement/iter")
+            wandb.define_metric("refinement/iter")
     slam = SLAM(config, save_dir=save_dir)
 
     slam.run()

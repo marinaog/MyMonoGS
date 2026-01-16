@@ -139,6 +139,16 @@ class BackEnd(mp.Process):
         Log("Initialized map")
         return render_pkg
 
+    def get_mlp_grad_norm(self):
+            """Calculates and returns the gradient norm of the MLP."""
+            if hasattr(self.gaussians, "color_mlp") and self.gaussians.color_mlp is not None:
+                total_norm = 0
+                for p in self.gaussians.color_mlp.parameters():
+                    if p.grad is not None:
+                        total_norm += p.grad.data.norm(2).item() ** 2
+                return total_norm ** 0.5
+            return 0.0
+    
     def map(self, current_window, prune=False, iters=1):
         if len(current_window) == 0:
             return
@@ -230,10 +240,12 @@ class BackEnd(mp.Process):
             isotropic_loss = torch.abs(scaling - scaling.mean(dim=1).view(-1, 1))
             loss_mapping += 10 * isotropic_loss.mean()
             loss_mapping.backward()
-            if self.config["Results"].get("use_wandb"):
+
+            if self.config["Results"].get("use_wandb") and self.iteration_count % 10 == 0:
                 metrics = {
-                    "backend/loss_rgb": loss_mapping.item(),
-                    "backend/iteration_count": self.iteration_count,
+                    "backend/loss_mapping": loss_mapping.item(),
+                    "backend/iteration": self.iteration_count,
+                    "mlp/mlp_grad_norm": self.get_mlp_grad_norm()
                 }
                 try:
                     if wandb.run is not None:
@@ -359,6 +371,12 @@ class BackEnd(mp.Process):
                 Ll1 = l1_loss(image, gt_image)
                 loss = (1.0 - self.opt_params.lambda_dssim) * (Ll1) + self.opt_params.lambda_dssim * (1.0 - ssim(image, gt_image))
             loss.backward()
+            if iteration % 100 == 0 and self.config["Results"].get("use_wandb"):
+                metrics = {
+                    "refinement/loss": loss.item(),
+                    "refinement/iter": iteration
+                }
+                self.frontend_queue.put(["log_metrics", metrics])
             with torch.no_grad():
                 self.gaussians.max_radii2D[visibility_filter] = torch.max(
                     self.gaussians.max_radii2D[visibility_filter],

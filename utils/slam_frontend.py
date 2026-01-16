@@ -173,7 +173,12 @@ class FrontEnd(mp.Process):
                 self.config, image, depth, opacity, viewpoint
             )
             loss_tracking.backward()
-
+            if self.config["Results"].get("use_wandb") and cur_frame_idx % 10 == 0:
+                metrics = {
+                    "frontend/loss_tracking": loss_tracking.item(),
+                    "frontend/frame_idx": cur_frame_idx
+                }
+                self.frontend_queue.put(["log_metrics", metrics])
             with torch.no_grad():
                 pose_optimizer.step()
                 converged = update_pose(viewpoint)
