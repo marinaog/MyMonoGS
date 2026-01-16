@@ -382,9 +382,9 @@ class BackEnd(mp.Process):
                     self.gaussians.max_radii2D[visibility_filter],
                     radii[visibility_filter],
                 )
+                self.gaussians.update_learning_rate(iteration)
                 self.gaussians.optimizer.step()
                 self.gaussians.optimizer.zero_grad(set_to_none=True)
-                self.gaussians.update_learning_rate(iteration)
         Log("Map refinement done")
 
     def push_to_frontend(self, tag=None):

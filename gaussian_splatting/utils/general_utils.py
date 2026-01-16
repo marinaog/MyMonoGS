@@ -93,6 +93,11 @@ def helper(
     log_lerp = np.exp(np.log(lr_init) * (1 - t) + np.log(lr_final) * t)
     return delay_rate * log_lerp
 
+def get_cosine_lr(iteration, lr_init, lr_final, max_steps):
+    if iteration > max_steps:
+        return lr_final
+    t = iteration / max_steps
+    return lr_final + 0.5 * (lr_init - lr_final) * (1 + np.cos(np.pi * t))
 
 def strip_lowerdiag(L):
     uncertainty = torch.zeros((L.shape[0], 6), dtype=torch.float, device="cuda")

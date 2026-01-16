@@ -23,6 +23,7 @@ from gaussian_splatting.utils.general_utils import (
     build_scaling_rotation,
     get_expon_lr_func,
     helper,
+    get_cosine_lr,
     inverse_sigmoid,
     strip_symmetric,
 )
@@ -49,6 +50,8 @@ class GaussianModel:
         self._opacity = torch.empty(0, device="cuda")
         self.max_radii2D = torch.empty(0, device="cuda")
         self.xyz_gradient_accum = torch.empty(0, device="cuda")
+        # self._color_features = torch.empty(0, device="cuda")
+        # self._color_biases = torch.empty(0, device="cuda")
 
         self.unique_kfIDs = torch.empty(0).int()
         self.n_obs = torch.empty(0).int()
@@ -287,16 +290,6 @@ class GaussianModel:
                 "name": "xyz",
             },
             {
-                "params": [self._features_dc],
-                "lr": training_args.feature_lr,
-                "name": "f_dc",
-            },
-            {
-                "params": [self._features_rest],
-                "lr": training_args.feature_lr / 20.0,
-                "name": "f_rest",
-            },
-            {
                 "params": [self._opacity],
                 "lr": training_args.opacity_lr,
                 "name": "opacity",
@@ -312,6 +305,38 @@ class GaussianModel:
                 "name": "rotation",
             },
         ]
+
+        if self.use_mlp:
+            # 0. Store initial values for the scheduler
+            mlp_lr = float(self.config["mlp_opt_params"]["optim_color_mlp"]["lr"])
+            feat_lr = float(self.config["mlp_opt_params"]["feature_lr_mlp_feat"])
+            bias_lr = float(self.config["mlp_opt_params"]["feature_lr_mlp_bias"])
+
+            # 1. The Global MLP weights (F_theta)
+            l.append({
+                "params": list(self.color_mlp.parameters()), 
+                "lr": mlp_lr, 
+                "lr_init": mlp_lr, # Stored for scheduler
+                "name": "color_mlp"
+            })
+            # 2. Per-Gaussian Color Features (f_i)
+            l.append({
+                "params": [self._features_dc], #_color_features
+                "lr": feat_lr, 
+                "lr_init": feat_lr, # Stored for scheduler
+                "name": "f_dc"
+            })
+            # 3. Per-Gaussian Color Biases (b_i)
+            l.append({
+                "params": [self._features_rest], #_color_biases
+                "lr": bias_lr, 
+                "lr_init": bias_lr, # Stored for scheduler
+                "name": "f_rest"
+            })
+        else:
+            # Standard SH features if not using MLP
+            l.append({"params": [self._features_dc], "lr": training_args.feature_lr, "name": "f_dc"})
+            l.append({"params": [self._features_rest], "lr": training_args.feature_lr / 20.0, "name": "f_rest"})
 
         self.optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15)
         self.xyz_scheduler_args = get_expon_lr_func(
@@ -329,8 +354,9 @@ class GaussianModel:
     def update_learning_rate(self, iteration):
         """Learning rate scheduling per step"""
         for param_group in self.optimizer.param_groups:
-            if param_group["name"] == "xyz":
-                # lr = self.xyz_scheduler_args(iteration)
+            name = param_group["name"]
+            
+            if name == "xyz":
                 lr = helper(
                     iteration,
                     lr_init=self.lr_init,
@@ -338,9 +364,16 @@ class GaussianModel:
                     lr_delay_mult=self.lr_delay_mult,
                     max_steps=self.max_steps,
                 )
-
                 param_group["lr"] = lr
-                return lr
+                
+            elif name in ["color_mlp", "f_dc", "f_rest"] and self.use_mlp:
+                # Ensure these were stored in self during training_setup
+                # LE3D uses 1e-4 for MLP/Bias and 2e-3 for Features
+                lr_init = param_group.get("lr_init", param_group["lr"])
+                lr_final = 1.0e-5
+                
+                lr = get_cosine_lr(iteration, lr_init, lr_final, self.max_steps)
+                param_group["lr"] = lr
 
     def construct_list_of_attributes(self):
         l = ["x", "y", "z", "nx", "ny", "nz"]
@@ -517,6 +550,11 @@ class GaussianModel:
     def _prune_optimizer(self, mask):
         optimizable_tensors = {}
         for group in self.optimizer.param_groups:
+            # Skip pruning for global MLP weights because their shape doesn't match the number of Gaussians.
+            if group["name"] == "color_mlp":
+                optimizable_tensors[group["name"]] = group["params"][0]
+                continue
+        
             stored_state = self.optimizer.state.get(group["params"][0], None)
             if stored_state is not None:
                 stored_state["exp_avg"] = stored_state["exp_avg"][mask]
@@ -557,6 +595,9 @@ class GaussianModel:
     def cat_tensors_to_optimizer(self, tensors_dict):
         optimizable_tensors = {}
         for group in self.optimizer.param_groups:
+            if group["name"] == "color_mlp":
+                optimizable_tensors[group["name"]] = group["params"][0]
+                continue
             assert len(group["params"]) == 1
             extension_tensor = tensors_dict[group["name"]]
             stored_state = self.optimizer.state.get(group["params"][0], None)
@@ -601,21 +642,32 @@ class GaussianModel:
     ):
         d = {
             "xyz": new_xyz,
-            "f_dc": new_features_dc,
-            "f_rest": new_features_rest,
             "opacity": new_opacities,
             "scaling": new_scaling,
             "rotation": new_rotation,
         }
+        d["f_dc"] = new_features_dc
+        d["f_rest"] = new_features_rest
+        # if self.use_mlp:
+        #     d["color_feat"] = new_features_rest # Map f_rest to color_feat
+        #     d["color_bias"] = new_features_dc   # Map f_dc to color_bias
+        # else:
+        #     d["f_dc"] = new_features_dc
+        #     d["f_rest"] = new_features_rest
         for key in d:
             d[key] = d[key].cuda()
         optimizable_tensors = self.cat_tensors_to_optimizer(d)
+
         self._xyz = optimizable_tensors["xyz"]
-        self._features_dc = optimizable_tensors["f_dc"]
-        self._features_rest = optimizable_tensors["f_rest"]
         self._opacity = optimizable_tensors["opacity"]
         self._scaling = optimizable_tensors["scaling"]
         self._rotation = optimizable_tensors["rotation"]
+        if self.use_mlp:
+                self._features_dc = optimizable_tensors["f_dc"]
+                self._features_rest = optimizable_tensors["f_rest"]
+        else:
+            self._features_dc = optimizable_tensors["f_dc"]
+            self._features_rest = optimizable_tensors["f_rest"]
 
         self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
