@@ -305,7 +305,7 @@ if __name__ == "__main__":
             wandb.define_metric("PSNR*", step_metric="frame_idx")
             wandb.define_metric("backend/iteration_count")
             wandb.define_metric("backend/loss_rgb", step_metric="backend/iteration_count")
-            wandb.define_metric("debug/mlp_grad_norm", step_metric="backend/iteration_count")
+            wandb.define_metric("mlp/mlp_grad_norm", step_metric="backend/iteration_count")
 
             wandb.define_metric("frontend/loss_tracking", step_metric="frame_idx")
             wandb.define_metric("frontend/frame_idx", step_metric="frame_idx")
