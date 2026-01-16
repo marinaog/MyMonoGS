@@ -129,78 +129,85 @@ class SLAM:
         Log("Total FPS", N_frames / (start.elapsed_time(end) * 0.001), tag="Eval")
 
         if self.eval_rendering:
-            self.gaussians = self.frontend.gaussians
-            kf_indices = self.frontend.kf_indices
-            ATE = eval_ate(
-                self.frontend.cameras,
-                self.frontend.kf_indices,
-                self.save_dir,
-                0,
-                final=True,
-                monocular=self.monocular,
-            )
+            try:
+                self.gaussians = self.frontend.gaussians
+                kf_indices = self.frontend.kf_indices
+                ATE = eval_ate(
+                    self.frontend.cameras,
+                    self.frontend.kf_indices,
+                    self.save_dir,
+                    0,
+                    final=True,
+                    monocular=self.monocular,
+                )
 
-            rendering_result = eval_rendering(
-                self.frontend.cameras,
-                self.gaussians,
-                self.dataset,
-                self.save_dir,
-                self.pipeline_params,
-                self.background,
-                kf_indices=kf_indices,
-                iteration="before_opt",
-                raw=self.raw,
-            )
-            columns = ["tag", "psnr", "ssim", "lpips", "RMSE ATE", "FPS"]
-            metrics_table = wandb.Table(columns=columns)
-            metrics_table.add_data(
-                "Before",
-                rendering_result["mean_psnr"],
-                rendering_result["mean_ssim"],
-                rendering_result["mean_lpips"],
-                ATE,
-                FPS,
-            )
+                rendering_result = eval_rendering(
+                    self.frontend.cameras,
+                    self.gaussians,
+                    self.dataset,
+                    self.save_dir,
+                    self.pipeline_params,
+                    self.background,
+                    kf_indices=kf_indices,
+                    iteration="before_opt",
+                    raw=self.raw,
+                )
+                columns = ["tag", "psnr", "ssim", "lpips", "RMSE ATE", "FPS"]
+                metrics_table = wandb.Table(columns=columns)
+                metrics_table.add_data(
+                    "Before",
+                    rendering_result["mean_psnr"],
+                    rendering_result["mean_ssim"],
+                    rendering_result["mean_lpips"],
+                    ATE,
+                    FPS,
+                )
 
-            # re-used the frontend queue to retrive the gaussians from the backend.
-            while not frontend_queue.empty():
-                try:
-                    data = self.frontend_queue.get()
-                except (FileNotFoundError, EOFError, ConnectionError):
-                    print("Backend process crashed or closed the connection.")
-            backend_queue.put(["color_refinement"])
-            while True:
-                if frontend_queue.empty():
-                    time.sleep(0.01)
-                    continue
-                data = frontend_queue.get()
-                if data[0] == "log_metrics":
-                    wandb.log(data[1])
-                    continue
-                if data[0] == "sync_backend":
-                    gaussians = data[1]
-                    self.gaussians = gaussians
-                    break
+                # re-used the frontend queue to retrive the gaussians from the backend.
+                while not frontend_queue.empty():
+                    try:
+                        data = self.frontend_queue.get()
+                    except (FileNotFoundError, EOFError, ConnectionError):
+                        print("Backend process crashed or closed the connection.")
+                backend_queue.put(["color_refinement"])
+                while True:
+                    if not backend_process.is_alive():
+                        Log("Backend process died (likely OOM). Exiting wait loop.")
+                        break
+                    if frontend_queue.empty():
+                        time.sleep(0.01)
+                        continue
+                    data = frontend_queue.get()
+                    if data[0] == "log_metrics":
+                        wandb.log(data[1])
+                        continue
+                    if data[0] == "sync_backend":
+                        gaussians = data[1]
+                        self.gaussians = gaussians
+                        break
 
-            rendering_result = eval_rendering(
-                self.frontend.cameras,
-                self.gaussians,
-                self.dataset,
-                self.save_dir,
-                self.pipeline_params,
-                self.background,
-                kf_indices=kf_indices,
-                iteration="after_opt",
-            )
-            metrics_table.add_data(
-                "After",
-                rendering_result["mean_psnr"],
-                rendering_result["mean_ssim"],
-                rendering_result["mean_lpips"],
-                ATE,
-                FPS,
-            )
-            wandb.log({"Metrics": metrics_table})
+                rendering_result = eval_rendering(
+                    self.frontend.cameras,
+                    self.gaussians,
+                    self.dataset,
+                    self.save_dir,
+                    self.pipeline_params,
+                    self.background,
+                    kf_indices=kf_indices,
+                    iteration="after_opt",
+                )
+                metrics_table.add_data(
+                    "After",
+                    rendering_result["mean_psnr"],
+                    rendering_result["mean_ssim"],
+                    rendering_result["mean_lpips"],
+                    ATE,
+                    FPS,
+                )
+                wandb.log({"Metrics": metrics_table})
+            except torch.cuda.OutOfMemoryError:
+                Log("OOM during Evaluation/Refinement. Saving whatever is possible.")
+
             save_gaussians(self.gaussians, self.save_dir, "final_after_opt", final=True)
             if self.use_mlp:
                 mlp_save_path = os.path.join(self.save_dir, "color_mlp.pth")

@@ -388,12 +388,26 @@ class FrontEnd(mp.Process):
             keyframes = [self.cameras[kf_idx] for kf_idx in self.current_window]
             colors_for_gui = self.gaussians.get_mlp_color(viewpoint).detach().clone() if self.use_mlp else None
             
-            self.q_main2vis.put(gui_utils.GaussianPacket(
-                gaussians=clone_obj(self.gaussians), current_frame=viewpoint,
-                keyframes=keyframes, kf_window=current_window_dict,
-                use_mlp=self.use_mlp, mlp_colors=colors_for_gui,
-            ))
-
+            try:
+                # This is usually where the OOM happens
+                gaussians_copy = clone_obj(self.gaussians)
+                self.q_main2vis.put(gui_utils.GaussianPacket(
+                    gaussians=gaussians_copy, current_frame=viewpoint,
+                    keyframes=keyframes, kf_window=current_window_dict,
+                    use_mlp=self.use_mlp, mlp_colors=colors_for_gui,
+                ))
+            except torch.OutOfMemoryError:
+                Log("!!! CUDA OOM detected in Frontend. Attempting graceful shutdown... !!!")
+                # Clear the copy to free whatever little memory we can
+                gaussians_copy = None
+                torch.cuda.empty_cache()
+                
+                # Tell the backend to stop mapping
+                self.backend_queue.put(["stop"])
+                
+                # Break the loop so the Frontend finishes its run() method
+                break
+            
             if self.requested_keyframe > 0:
                 self.cleanup(cur_frame_idx)
                 cur_frame_idx += 1
