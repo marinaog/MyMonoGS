@@ -63,7 +63,7 @@ class SLAM:
         self.dataset = load_dataset(
             model_params, model_params.source_path, config=config
         )
-        self.gaussians = GaussianModel(model_params.sh_degree, config=self.config, dataset=self.dataset, use_mlp=self.use_mlp)
+        self.gaussians = GaussianModel(model_params.sh_degree, config=self.config, dataset=self.dataset, raw=self.raw, use_mlp=self.use_mlp)
         self.gaussians.init_lr(6.0)
 
         self.gaussians.training_setup(opt_params)

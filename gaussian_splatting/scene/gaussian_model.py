@@ -38,7 +38,7 @@ from gaussian_splatting.utils.graphics_utils import getProjectionMatrix2
 @ARCH_REGISTRY.register()
 
 class GaussianModel:
-    def __init__(self, sh_degree: int, config=None, dataset=None, use_mlp=False):
+    def __init__(self, sh_degree: int, config=None, dataset=None, raw=False, use_mlp=False):
         self.active_sh_degree = 0
         self.max_sh_degree = sh_degree
 
@@ -73,6 +73,7 @@ class GaussianModel:
         self.ply_input = None
 
         self.isotropic = False
+        self.raw = raw
         self.use_mlp = use_mlp
 
         # Init of MLP stuff
@@ -135,7 +136,15 @@ class GaussianModel:
         cam = cam_info
         image_ab = (torch.exp(cam.exposure_a)) * cam.original_image + cam.exposure_b
         image_ab = torch.clamp(image_ab, 0.0, 1.0)
-        rgb_raw = (image_ab * 255).byte().permute(1, 2, 0).contiguous().cpu().numpy()
+        if self.raw:
+            # For color bias initialization:
+            self.temp_raw_float_image = image_ab.detach().permute(1, 2, 0).contiguous().cpu().numpy()
+            # For gaussians seed:
+            image_ab = torch.clamp(image_ab * 255, 0, 255)
+        else:
+            image_ab *= 255
+
+        rgb_raw = image_ab.byte().permute(1, 2, 0).contiguous().cpu().numpy()
 
         if depthmap is not None:
             rgb = o3d.geometry.Image(rgb_raw.astype(np.uint8))
@@ -190,7 +199,15 @@ class GaussianModel:
         )
         pcd_tmp = pcd_tmp.random_down_sample(1.0 / downsample_factor)
         new_xyz = np.asarray(pcd_tmp.points)
-        new_rgb = np.asarray(pcd_tmp.colors)
+        if self.raw:
+            pts_view = (W2C[:3, :3] @ new_xyz.T + W2C[:3, 3:4]).T
+            u = np.round((pts_view[:, 0] * cam.fx / pts_view[:, 2]) + cam.cx).astype(int)
+            v = np.round((pts_view[:, 1] * cam.fy / pts_view[:, 2]) + cam.cy).astype(int)
+            u = np.clip(u, 0, cam.image_width - 1)
+            v = np.clip(v, 0, cam.image_height - 1)
+            new_rgb = self.temp_raw_float_image[v, u]
+        else:
+            new_rgb = np.asarray(pcd_tmp.colors)
 
         pcd = BasicPointCloud(
             points=new_xyz, colors=new_rgb, normals=np.zeros((new_xyz.shape[0], 3))
@@ -538,25 +555,14 @@ class GaussianModel:
         optimizable_tensors = {}
         for group in self.optimizer.param_groups:
             if group["name"] == name:
-                old_param = group["params"][0]
-                new_param = nn.Parameter(tensor.requires_grad_(True))
+                stored_state = self.optimizer.state.get(group["params"][0], None)
+                stored_state["exp_avg"] = torch.zeros_like(tensor)
+                stored_state["exp_avg_sq"] = torch.zeros_like(tensor)
 
-                stored_state = self.optimizer.state.get(old_param, None)
-                # If there was a state, reset it to zeros of the new shape
-                if stored_state is not None:
-                    stored_state["exp_avg"] = torch.zeros_like(tensor)
-                    stored_state["exp_avg_sq"] = torch.zeros_like(tensor)
+                del self.optimizer.state[group["params"][0]]
+                group["params"][0] = nn.Parameter(tensor.requires_grad_(True))
+                self.optimizer.state[group["params"][0]] = stored_state
 
-                    del self.optimizer.state[old_param]
-                    self.optimizer.state[new_param] = stored_state
-                # New points won't have a state yet, so we create one
-                else: 
-                    self.optimizer.state[new_param] = {
-                        "exp_avg": torch.zeros_like(tensor),
-                        "exp_avg_sq": torch.zeros_like(tensor),
-                        "step": torch.tensor(0, dtype=torch.float32, device="cuda")
-                    }
-                group["params"][0] = new_param
                 optimizable_tensors[group["name"]] = group["params"][0]
         return optimizable_tensors
 
@@ -682,21 +688,20 @@ class GaussianModel:
 
         if self.config["Dataset"]["type"] != "realsense" and self.use_mlp:  # So mlp being use and no inference
             with torch.no_grad():
-                cam_id = 0
-                projection_matrix = getProjectionMatrix2(
-                                    znear=0.01, zfar=100.0,
-                                    fx=self.dataset.fx, fy=self.dataset.fy,
-                                    cx=self.dataset.cx, cy=self.dataset.cy,
-                                    W=self.dataset.width, H=self.dataset.height,
-                                ).transpose(0, 1).cuda()
-                viewpoint_camera = Camera.init_from_dataset(self.dataset, cam_id, projection_matrix)
-                dir_pp = (self.get_xyz - viewpoint_camera.camera_center.repeat(self.get_xyz.shape[0], 1))
-                dir_pp_normalized = dir_pp/dir_pp.norm(dim=1, keepdim=True)
-                
-                colors_precomp = torch.log(self.color_mlp(self.get_features_mlp, dir_pp_normalized, w_bias=False) + 1e-6)
-                initialized_tensors = self.replace_tensor_to_optimizer(self._features_dc - colors_precomp[:, None, :], "f_dc")
-                self._features_dc = initialized_tensors["f_dc"]
-                #print("peo")
+                with torch.no_grad():
+                    cam_id = 0
+                    projection_matrix = getProjectionMatrix2(
+                                        znear=0.01, zfar=100.0,
+                                        fx=self.dataset.fx, fy=self.dataset.fy,
+                                        cx=self.dataset.cx, cy=self.dataset.cy,
+                                        W=self.dataset.width, H=self.dataset.height,
+                                    ).transpose(0, 1).cuda()
+                    viewpoint_camera = Camera.init_from_dataset(self.dataset, cam_id, projection_matrix)
+                    dir_pp = (self.get_xyz - viewpoint_camera.camera_center.repeat(self.get_xyz.shape[0], 1))
+                    dir_pp_normalized = dir_pp/dir_pp.norm(dim=1, keepdim=True)
+                    colors_precomp = torch.log(self.color_mlp(self.get_features_mlp, dir_pp_normalized, w_bias=False))
+                    self._features_dc = nn.Parameter(self._features_dc - colors_precomp[:, None, :], requires_grad=True)
+
 
     def densify_and_split(self, grads, grad_threshold, scene_extent, N=2):
         n_init_points = self.get_xyz.shape[0]
