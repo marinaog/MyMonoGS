@@ -112,6 +112,8 @@ class GaussianModel:
 
     @property
     def get_features_mlp(self):
+        # Tuple index 0: Bias (3D) -> self._features_dc
+        # Tuple index 1: Feature (16D) -> self._features_rest
         features_dc = self._features_dc[:, 0, :]
         features_rest = self._features_rest[:, 0, :]
         return features_dc, features_rest
@@ -319,18 +321,18 @@ class GaussianModel:
                 "lr_init": mlp_lr, # Stored for scheduler
                 "name": "color_mlp"
             })
-            # 2. Per-Gaussian Color Features (f_i)
+            # 2. Per-Gaussian Color Biases (b_i)
             l.append({
                 "params": [self._features_dc], #_color_features
-                "lr": feat_lr, 
-                "lr_init": feat_lr, # Stored for scheduler
-                "name": "f_dc"
-            })
-            # 3. Per-Gaussian Color Biases (b_i)
-            l.append({
-                "params": [self._features_rest], #_color_biases
                 "lr": bias_lr, 
                 "lr_init": bias_lr, # Stored for scheduler
+                "name": "f_dc"
+            })
+            # 3. Per-Gaussian Color Features (f_i)
+            l.append({
+                "params": [self._features_rest], #_color_biases
+                "lr": feat_lr, 
+                "lr_init": feat_lr, # Stored for scheduler
                 "name": "f_rest"
             })
         else:
@@ -536,14 +538,25 @@ class GaussianModel:
         optimizable_tensors = {}
         for group in self.optimizer.param_groups:
             if group["name"] == name:
-                stored_state = self.optimizer.state.get(group["params"][0], None)
-                stored_state["exp_avg"] = torch.zeros_like(tensor)
-                stored_state["exp_avg_sq"] = torch.zeros_like(tensor)
+                old_param = group["params"][0]
+                new_param = nn.Parameter(tensor.requires_grad_(True))
 
-                del self.optimizer.state[group["params"][0]]
-                group["params"][0] = nn.Parameter(tensor.requires_grad_(True))
-                self.optimizer.state[group["params"][0]] = stored_state
+                stored_state = self.optimizer.state.get(old_param, None)
+                # If there was a state, reset it to zeros of the new shape
+                if stored_state is not None:
+                    stored_state["exp_avg"] = torch.zeros_like(tensor)
+                    stored_state["exp_avg_sq"] = torch.zeros_like(tensor)
 
+                    del self.optimizer.state[old_param]
+                    self.optimizer.state[new_param] = stored_state
+                # New points won't have a state yet, so we create one
+                else: 
+                    self.optimizer.state[new_param] = {
+                        "exp_avg": torch.zeros_like(tensor),
+                        "exp_avg_sq": torch.zeros_like(tensor),
+                        "step": 0 # Initialize step count if needed
+                    }
+                group["params"][0] = new_param
                 optimizable_tensors[group["name"]] = group["params"][0]
         return optimizable_tensors
 
@@ -648,12 +661,6 @@ class GaussianModel:
         }
         d["f_dc"] = new_features_dc
         d["f_rest"] = new_features_rest
-        # if self.use_mlp:
-        #     d["color_feat"] = new_features_rest # Map f_rest to color_feat
-        #     d["color_bias"] = new_features_dc   # Map f_dc to color_bias
-        # else:
-        #     d["f_dc"] = new_features_dc
-        #     d["f_rest"] = new_features_rest
         for key in d:
             d[key] = d[key].cuda()
         optimizable_tensors = self.cat_tensors_to_optimizer(d)
@@ -662,12 +669,8 @@ class GaussianModel:
         self._opacity = optimizable_tensors["opacity"]
         self._scaling = optimizable_tensors["scaling"]
         self._rotation = optimizable_tensors["rotation"]
-        if self.use_mlp:
-                self._features_dc = optimizable_tensors["f_dc"]
-                self._features_rest = optimizable_tensors["f_rest"]
-        else:
-            self._features_dc = optimizable_tensors["f_dc"]
-            self._features_rest = optimizable_tensors["f_rest"]
+        self._features_dc = optimizable_tensors["f_dc"]
+        self._features_rest = optimizable_tensors["f_rest"]
 
         self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
@@ -677,7 +680,7 @@ class GaussianModel:
         if new_n_obs is not None:
             self.n_obs = torch.cat((self.n_obs, new_n_obs)).int()
 
-        if self.config["Dataset"]["type"] != "realsense" and self.use_mlp:  # So no inference and mlp being use
+        if self.config["Dataset"]["type"] != "realsense" and self.use_mlp:  # So mlp being use and no inference
             with torch.no_grad():
                 cam_id = 0
                 projection_matrix = getProjectionMatrix2(
@@ -689,8 +692,11 @@ class GaussianModel:
                 viewpoint_camera = Camera.init_from_dataset(self.dataset, cam_id, projection_matrix)
                 dir_pp = (self.get_xyz - viewpoint_camera.camera_center.repeat(self.get_xyz.shape[0], 1))
                 dir_pp_normalized = dir_pp/dir_pp.norm(dim=1, keepdim=True)
-                colors_precomp = torch.log(self.color_mlp(self.get_features_mlp, dir_pp_normalized, w_bias=False))
-                self._features_dc = nn.Parameter(self._features_dc - colors_precomp[:, None, :], requires_grad=True)
+                
+                colors_precomp = torch.log(self.color_mlp(self.get_features_mlp, dir_pp_normalized, w_bias=False) + 1e-6)
+                initialized_tensors = self.replace_tensor_to_optimizer(self._features_dc - colors_precomp[:, None, :], "f_dc")
+                self._features_dc = initialized_tensors["f_dc"]
+                #print("peo")
 
     def densify_and_split(self, grads, grad_threshold, scene_extent, N=2):
         n_init_points = self.get_xyz.shape[0]
