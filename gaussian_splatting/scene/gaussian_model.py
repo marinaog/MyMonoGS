@@ -554,7 +554,7 @@ class GaussianModel:
                     self.optimizer.state[new_param] = {
                         "exp_avg": torch.zeros_like(tensor),
                         "exp_avg_sq": torch.zeros_like(tensor),
-                        "step": 0 # Initialize step count if needed
+                        "step": torch.tensor(0, dtype=torch.float32, device="cuda")
                     }
                 group["params"][0] = new_param
                 optimizable_tensors[group["name"]] = group["params"][0]
