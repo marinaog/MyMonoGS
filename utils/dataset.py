@@ -160,7 +160,7 @@ class RawSLAMParser:
         self.poses = []
         for pose in pose_vecs:
             c2w = self.pose_matrix_from_quaternion(pose)
-            self.poses += [c2w]
+            self.poses += [np.linalg.inv(c2w)]
 
 
     def get_filepaths(self):
