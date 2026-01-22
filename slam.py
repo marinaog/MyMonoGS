@@ -166,7 +166,7 @@ class SLAM:
                 # re-used the frontend queue to retrive the gaussians from the backend.
                 while not frontend_queue.empty():
                     try:
-                        data = self.frontend_queue.get()
+                        data = frontend_queue.get()
                     except (FileNotFoundError, EOFError, ConnectionError):
                         print("Backend process crashed or closed the connection.")
                 backend_queue.put(["color_refinement"])
