@@ -555,15 +555,30 @@ class GaussianModel:
         optimizable_tensors = {}
         for group in self.optimizer.param_groups:
             if group["name"] == name:
-                stored_state = self.optimizer.state.get(group["params"][0], None)
-                stored_state["exp_avg"] = torch.zeros_like(tensor)
-                stored_state["exp_avg_sq"] = torch.zeros_like(tensor)
+                old_param = group["params"][0]
+                stored_state = self.optimizer.state.get(old_param, None)
+                
+                if old_param in self.optimizer.state:
+                    del self.optimizer.state[old_param]
+                
+                new_param = nn.Parameter(tensor.requires_grad_(True))
+                group["params"][0] = new_param
+                
+                if stored_state is not None:
+                    # If 'step' is missing in the old state for some reason, add it
+                    if "step" not in stored_state:
+                        stored_state["step"] = torch.tensor(0.0, device="cuda")
+                    self.optimizer.state[new_param] = stored_state
+                else:
+                    # Initialize full Adam state for brand new Gaussians
+                    # 'step' must be a float tensor for many Adam implementations
+                    self.optimizer.state[new_param] = {
+                        "exp_avg": torch.zeros_like(tensor),
+                        "exp_avg_sq": torch.zeros_like(tensor),
+                        "step": torch.tensor(0.0, device="cuda") 
+                    }
 
-                del self.optimizer.state[group["params"][0]]
-                group["params"][0] = nn.Parameter(tensor.requires_grad_(True))
-                self.optimizer.state[group["params"][0]] = stored_state
-
-                optimizable_tensors[group["name"]] = group["params"][0]
+                optimizable_tensors[group["name"]] = new_param
         return optimizable_tensors
 
     def _prune_optimizer(self, mask):
@@ -689,18 +704,10 @@ class GaussianModel:
         if self.config["Dataset"]["type"] != "realsense" and self.use_mlp:  # So mlp being use and no inference
             with torch.no_grad():
                 with torch.no_grad():
-                    cam_id = 0
-                    projection_matrix = getProjectionMatrix2(
-                                        znear=0.01, zfar=100.0,
-                                        fx=self.dataset.fx, fy=self.dataset.fy,
-                                        cx=self.dataset.cx, cy=self.dataset.cy,
-                                        W=self.dataset.width, H=self.dataset.height,
-                                    ).transpose(0, 1).cuda()
-                    viewpoint_camera = Camera.init_from_dataset(self.dataset, cam_id, projection_matrix)
-                    dir_pp = (self.get_xyz - viewpoint_camera.camera_center.repeat(self.get_xyz.shape[0], 1))
-                    dir_pp_normalized = dir_pp/dir_pp.norm(dim=1, keepdim=True)
-                    colors_precomp = torch.log(self.color_mlp(self.get_features_mlp, dir_pp_normalized, w_bias=False))
-                    self._features_dc = nn.Parameter(self._features_dc - colors_precomp[:, None, :], requires_grad=True)
+                    res_dict = self.replace_tensor_to_optimizer(self._features_dc, "f_dc")
+                    self._features_dc = res_dict["f_dc"]
+                    res_dict_rest = self.replace_tensor_to_optimizer(self._features_rest, "f_rest")
+                    self._features_rest = res_dict_rest["f_rest"]
 
 
     def densify_and_split(self, grads, grad_threshold, scene_extent, N=2):
