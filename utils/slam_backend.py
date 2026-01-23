@@ -331,6 +331,14 @@ class BackEnd(mp.Process):
                 self.gaussians.optimizer.step()
                 self.gaussians.optimizer.zero_grad(set_to_none=True)
                 self.gaussians.update_learning_rate(self.iteration_count)
+                # # DEBUG
+                # total_norm = 0
+                # for p in [viewpoint.cam_rot_delta, viewpoint.cam_trans_delta]:
+                #     if p.grad is not None:
+                #         total_norm += p.grad.data.norm(2).item()
+                # if total_norm > 10.0: # DEBUG
+                #     print(f"CRITICAL: Pose gradients exploding: {total_norm}")
+                # # fin DEBUG
                 self.keyframe_optimizers.step()
                 self.keyframe_optimizers.zero_grad(set_to_none=True)
                 # Pose update
@@ -363,7 +371,7 @@ class BackEnd(mp.Process):
             gt_image = viewpoint_cam.original_image.cuda()
             if self.config["Training"].get("loss") and self.config["Training"]["loss"] == "rawnerf":
                 rgb_boundary_threshold = self.config["Training"]["rgb_boundary_threshold"]
-                mask = (gt_image.sum(dim=0) > rgb_boundary_threshold)
+                mask = (gt_image.sum(dim=0) > rgb_boundary_threshold).expand_as(gt_image)
                 Lrawnerf = rawnerf_loss(image, gt_image, mask=mask)
                 loss = (1.0 - self.opt_params.lambda_dssim) * (Lrawnerf) + self.opt_params.lambda_dssim * (1.0 - ssim(image, gt_image))
             
