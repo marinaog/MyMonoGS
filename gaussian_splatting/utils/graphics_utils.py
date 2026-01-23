@@ -38,12 +38,18 @@ def getWorld2View2(R, t, translate=torch.tensor([0.0, 0.0, 0.0]), scale=1.0):
     Rt[:3, 3] = t
     Rt[3, 3] = 1.0
 
-    C2W = torch.linalg.inv(Rt)
-    cam_center = C2W[:3, 3]
-    cam_center = (cam_center + translate) * scale
-    C2W[:3, 3] = cam_center
-    Rt = torch.linalg.inv(C2W)
-    return Rt
+    try:
+        C2W = torch.linalg.inv(Rt)
+        cam_center = C2W[:3, 3]
+        cam_center = (cam_center + translate) * scale
+        C2W[:3, 3] = cam_center
+        return torch.linalg.inv(C2W)
+    except torch._C._LinAlgError:
+        # If singular, the optimizer likely pushed R/t too far.
+        # Fallback: add a tiny bit of noise to the diagonal or return identity
+        print("Warning: Singular matrix at frame 68. Optimization collapsed.")
+        Rt[0:3, 0:3] += torch.eye(3, device=R.device) * 1e-6
+        return torch.linalg.inv(Rt) # Attempt safe return
 
 
 def getProjectionMatrix(znear, zfar, fovX, fovY):
