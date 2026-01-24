@@ -1,6 +1,7 @@
 import json
 import os
 
+from pathlib import Path
 import cv2
 import evo
 import numpy as np
@@ -20,6 +21,8 @@ from gaussian_splatting.utils.image_utils import psnr
 from gaussian_splatting.utils.loss_utils import ssim
 from gaussian_splatting.utils.system_utils import mkdir_p
 from utils.logging_utils import Log
+
+from utils.eval_utils_posteval import raw2normal
 
 
 def evaluate_evo(poses_gt, poses_est, plot_dir, label, monocular=False):
@@ -128,36 +131,67 @@ def eval_rendering(
     img_pred, img_gt, saved_frame_idx = [], [], []
     end_idx = len(frames) - 1 if iteration == "final" or "before_opt" else iteration
     psnr_array, ssim_array, lpips_array = [], [], []
+
+    save_dir = Path(save_dir)
+
+    (save_dir / "renders/renders").mkdir(parents=True, exist_ok=True)
+    (save_dir / "renders/gt").mkdir(parents=True, exist_ok=True)
+
+    print('Saving renders in:', save_dir)
+    if raw:
+        img_pred_raw, img_gt_raw, psnr_array_raw = [], [], []
+        (save_dir / "renders/renders_raw").mkdir(parents=True, exist_ok=True)
+        (save_dir / "renders/gt_raw").mkdir(parents=True, exist_ok=True)
+
     cal_lpips = LearnedPerceptualImagePatchSimilarity(
         net_type="alex", normalize=True
     ).to("cuda")
     latest_frame_idx = kf_indices[-1] + 2 if iteration else kf_indices[-1] + 1
+
+    s = 0
+    print(f'Saving 5 images every {int(len(kf_indices)/5)} frames')
     for idx in range(0, end_idx, interval):
         if idx in kf_indices:
             continue
         saved_frame_idx.append(idx)
         frame = frames[idx]
         gt_image, _, _ = dataset[idx]
+        mask = gt_image > 0
 
         rendering = render(frame, gaussians, pipe, background)["render"]
         image = torch.clamp(rendering, 0.0, 1.0)
 
         if raw:
-            gt = (gt_image.cpu().numpy().transpose((1, 2, 0)) * 65535).astype(np.float32)
-            pred = (image.detach().cpu().numpy().transpose((1, 2, 0)) * 65535).astype(
-                np.float32
-            )
+            # Compute PSNR in RAW space
+            gt = (gt_image.cpu().numpy().transpose((1, 2, 0)) * 65535).astype(np.uint16)
+            pred = (image.detach().cpu().numpy().transpose((1, 2, 0)) * 65535).astype(np.uint16)
+            psnr_raw_score = psnr((image[mask]).unsqueeze(0), (gt_image[mask]).unsqueeze(0))
+            psnr_array_raw.append(psnr_raw_score.item())
+            # Save RAW images
+            gt_raw = cv2.cvtColor(gt, cv2.COLOR_RGB2BGR)
+            pred_raw = cv2.cvtColor(pred, cv2.COLOR_RGB2BGR)
+            img_pred_raw.append(gt_raw)
+            img_gt_raw.append(pred_raw)
+            # Convert RAW to sRGB for normal evaluation
+            gt = (raw2normal(gt.astype(np.uint16)) * 255).astype(np.uint8)
+            pred = (raw2normal(pred.astype(np.uint16)) * 255).astype(np.uint8)
+
         else:
             gt = (gt_image.cpu().numpy().transpose((1, 2, 0)) * 255).astype(np.uint8)
-            pred = (image.detach().cpu().numpy().transpose((1, 2, 0)) * 255).astype(
-                np.uint8
-            )
+            pred = (image.detach().cpu().numpy().transpose((1, 2, 0)) * 255).astype(np.uint8)
         gt = cv2.cvtColor(gt, cv2.COLOR_BGR2RGB)
         pred = cv2.cvtColor(pred, cv2.COLOR_BGR2RGB)
+        if s == int(len(kf_indices)/5):
+            f"Saving img {idx}"
+            s=0
+            if raw:
+                cv2.imwrite(str(save_dir / "renders/renders_raw" / f'{idx:05d}.png'), pred_raw)
+                cv2.imwrite(str(save_dir / "renders/gt_raw" / f'{idx:05d}.png'), gt_raw)
+            cv2.imwrite(str(save_dir / "renders/renders" / f'{idx:05d}.png'), pred)
+            cv2.imwrite(str(save_dir / "renders/gt" / f'{idx:05d}.png'), gt)
+        s+=1
         img_pred.append(pred)
         img_gt.append(gt)
-
-        mask = gt_image > 0
 
         psnr_score = psnr((image[mask]).unsqueeze(0), (gt_image[mask]).unsqueeze(0))
         ssim_score = ssim((image).unsqueeze(0), (gt_image).unsqueeze(0))
@@ -174,10 +208,18 @@ def eval_rendering(
 
     wandb.log({"frame_idx": latest_frame_idx, "PSNR": float(np.mean(psnr_array))})
 
-    Log(
-        f'mean psnr: {output["mean_psnr"]}, ssim: {output["mean_ssim"]}, lpips: {output["mean_lpips"]}',
+    if raw:
+        output["mean_psnr_raw"] = float(np.mean(psnr_array_raw))
+        wandb.log({"frame_idx": latest_frame_idx, "PSNR_raw": float(np.mean(psnr_array_raw))})
+        Log(
+        f'mean psnr raw: {output["mean_psnr_raw"]}, mean psnr: {output["mean_psnr"]}, ssim: {output["mean_ssim"]}, lpips: {output["mean_lpips"]}',
         tag="Eval",
-    )
+        )
+    else:
+        Log(
+         f'mean psnr: {output["mean_psnr"]}, ssim: {output["mean_ssim"]}, lpips: {output["mean_lpips"]}',
+            tag="Eval",
+     )
 
     psnr_save_dir = os.path.join(save_dir, "psnr", str(iteration))
     mkdir_p(psnr_save_dir)
