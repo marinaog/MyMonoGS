@@ -65,6 +65,9 @@ def evaluate_evo(poses_gt, poses_est, plot_dir, label, monocular=False):
     ax.legend()
     plt.savefig(os.path.join(plot_dir, "evo_2dplot_{}.png".format(str(label))), dpi=90)
 
+    # Close and clear current figure
+    plt.close(fig) 
+    plt.clf() 
     return ape_stat
 
 
