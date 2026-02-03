@@ -135,7 +135,7 @@ def raw2normal(img, is_torch=False):
         out[high] = 1.055 * torch.pow(img[high], 1.0 / gamma) - 0.055
 
     else:
-        bright_factor = 0.98 / np.percentile(img, 99)
+        bright_factor = 0.98 / (np.percentile(img, 99) + 1e-6)
         img = np.clip(img * bright_factor, 0, 1)
         
         gamma = 2.4
