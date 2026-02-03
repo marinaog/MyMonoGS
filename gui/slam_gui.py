@@ -544,23 +544,41 @@ class SLAM_GUI:
             and self.gaussian_cur is not None
             and type(self.gaussian_cur) == GaussianPacket
         ):
-            features = self.gaussian_cur.get_features.clone()
-            kf_ids = self.gaussian_cur.unique_kfIDs.float()
-            rgb_kf = imgviz.depth2rgb(
-                kf_ids.view(-1, 1).cpu().numpy(), colormap="jet", dtype=np.float32
-            )
-            alpha = 0.1
-            self.gaussian_cur.get_features = alpha * features + (
-                1 - alpha
-            ) * torch.from_numpy(rgb_kf).to(features.device)
-            rendering_data = render(
-                current_cam,
-                self.gaussian_cur,
-                self.pipe,
-                self.background,
-                self.scaling_slider.double_value,
-            )
-            self.gaussian_cur.get_features = features
+            try:
+                features = self.gaussian_cur.get_features.clone()
+                kf_ids = self.gaussian_cur.unique_kfIDs.float()
+                rgb_kf = imgviz.depth2rgb(
+                    kf_ids.view(-1, 1).cpu().numpy(), colormap="jet", dtype=np.float32
+                )
+                alpha = 0.1
+                self.gaussian_cur.get_features = alpha * features + (
+                    1 - alpha
+                ) * torch.from_numpy(rgb_kf).to(features.device)
+                rendering_data = render(
+                    current_cam,
+                    self.gaussian_cur,
+                    self.pipe,
+                    self.background,
+                    self.scaling_slider.double_value,
+                )
+                self.gaussian_cur.get_features = features
+
+            except Exception as e:
+                # This will print the exact error message (e.g., "tuple has no attribute detach")
+                print(f"\n[GUI ERROR] Rasterization failed: {e}")
+
+                # Optional: Print the type of features to see what you're working with
+                if hasattr(self.gaussian_cur, 'get_features'):
+                    print(f"[DEBUG] get_features type: {type(self.gaussian_cur.get_features)}")
+
+                # Fallback: Call the standard render so the screen doesn't freeze
+                rendering_data = render(
+                    current_cam,
+                    self.gaussian_cur,
+                    self.pipe,
+                    self.background,
+                    self.scaling_slider.double_value,
+                )
         else:
             rendering_data = render(
                 current_cam,
