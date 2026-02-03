@@ -6,7 +6,7 @@ Results:
   save_trj_kf_intv: 5
   use_gui: False
   eval_rendering: True
-  use_wandb: False
+  use_wandb: True
 
 Dataset:
   type: 'rawslam'
@@ -46,8 +46,8 @@ Training:
   single_thread: False
   spherical_harmonics: False
   lr:
-    cam_rot_delta: 0.003
-    cam_trans_delta: 0.001
+    cam_rot_delta: 0.001 #05
+    cam_trans_delta: 0.0005 #25
 
 
 
@@ -68,7 +68,7 @@ opt_params:
   opacity_reset_interval: 3000
   densify_from_iter: 500
   densify_until_iter: 15000
-  densify_grad_threshold: 0.0002
+  densify_grad_threshold: 0.0006
 
 model_params:
   sh_degree: 0

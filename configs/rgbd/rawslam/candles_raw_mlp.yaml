@@ -25,6 +25,8 @@ Dataset:
 
 Training:
   loss: "rawnerf"
+  gaussian_th: 0.9
+  window_size: 8
   # alpha: 0.8
 
 mlp_opt_params:
@@ -49,3 +51,6 @@ mlp_opt_params:
 
 pipeline_params:
   use_mlp: True
+
+opt_params:
+  densification_interval: 100
