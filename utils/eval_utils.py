@@ -185,7 +185,7 @@ def eval_rendering(
         gt = cv2.cvtColor(gt, cv2.COLOR_BGR2RGB)
         pred = cv2.cvtColor(pred, cv2.COLOR_BGR2RGB)
         if s == int(len(kf_indices)/5):
-            f"Saving img {idx}"
+            print(f"Saving img {idx}")
             s=0
             if raw:
                 cv2.imwrite(str(save_dir / "renders/renders_raw" / f'{idx:05d}.png'), pred_raw)
