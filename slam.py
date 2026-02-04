@@ -54,7 +54,7 @@ class SLAM:
             self.raw = True
             if 'Training' in config.keys() and config['Training'].get('loss'):
                 loss_type = config['Training']['loss']
-                print(f'Using 16 bits raw data, a {loss_type} loss and alpha = {config['Training']['alpha']}')
+                print(f"Using 16 bits raw data, a {loss_type} loss and alpha = {config['Training']['alpha']}")
         else:
             print(f'Using 8 bits sRGB data, a {loss_type} loss')
 
@@ -256,7 +256,7 @@ if __name__ == "__main__":
         mkdir_p(base_results_dir)
 
         dataset_path = config["Dataset"]["dataset_path"]  # e.g. "datasets/rawslam/candles"
-      
+
         if args.forcename is not None:
             save_dir = os.path.join(base_results_dir, args.forcename)
         else:
@@ -287,7 +287,7 @@ if __name__ == "__main__":
             documents = yaml.dump(config, file)
 
         Log(f"saving results in {save_dir}")
-        
+
         if args.forcename is not None:
             run = wandb.init(
                 project="MonoGS",
@@ -302,7 +302,7 @@ if __name__ == "__main__":
                 config=config,
                 # mode="offline",
             )
-        
+
         if config["Results"]["use_wandb"]:
             os.environ["WANDB_RUN_ID"] = run.id
             os.environ["WANDB_RESUME"] = "must"
