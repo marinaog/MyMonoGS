@@ -20,7 +20,6 @@ from diff_gaussian_rasterization import (
 from gaussian_splatting.scene.gaussian_model import GaussianModel
 from gaussian_splatting.utils.sh_utils import eval_sh
 
-
 def render(
     viewpoint_camera,
     pc: GaussianModel,
@@ -28,10 +27,10 @@ def render(
     bg_color: torch.Tensor,
     scaling_modifier=1.0,
     mask=None,
+    colors_precomp=None
 ):
     """
     Render the scene.
-
     Background tensor (bg_color) must be on GPU!
     """
 
@@ -76,56 +75,55 @@ def render(
     means2D = screenspace_points
     opacity = pc.get_opacity
 
-    # If precomputed 3d covariance is provided, use it. If not, then it will be computed from
-    # scaling / rotation by the rasterizer.
     scales = None
     rotations = None
     cov3D_precomp = None
     if pipe.compute_cov3D_python:
         cov3D_precomp = pc.get_covariance(scaling_modifier)
     else:
-        # check if the covariance is isotropic
         if pc.get_scaling.shape[-1] == 1:
             scales = pc.get_scaling.repeat(1, 3)
         else:
             scales = pc.get_scaling
         rotations = pc.get_rotation
 
-    # If precomputed colors are provided, use them. Otherwise, if it is desired to precompute colors
-    # from SHs in Python, do it. If not, then SH -> RGB conversion will be done by rasterizer.
+    # --- UPDATED COLOR LOGIC ---
     shs = None
-    if not pc.use_mlp:
-        colors_precomp = None
-        if pipe.convert_SHs_python:
-            shs_view = pc.get_features.transpose(1, 2).view(
-                -1, 3, (pc.max_sh_degree + 1) ** 2
-            )
-            dir_pp = pc.get_xyz - viewpoint_camera.camera_center.repeat(
-                pc.get_features.shape[0], 1
-            )
-            dir_pp_normalized = dir_pp / dir_pp.norm(dim=1, keepdim=True)
-            sh2rgb = eval_sh(pc.active_sh_degree, shs_view, dir_pp_normalized)
-            colors_precomp = torch.clamp_min(sh2rgb + 0.5, 0.0)
+    # If colors are NOT provided by the script, use the original logic
+    if colors_precomp is None:
+        if not pc.use_mlp:
+            if pipe.convert_SHs_python:
+                shs_view = pc.get_features.transpose(1, 2).view(
+                    -1, 3, (pc.max_sh_degree + 1) ** 2
+                )
+                dir_pp = pc.get_xyz - viewpoint_camera.camera_center.repeat(
+                    pc.get_features.shape[0], 1
+                )
+                dir_pp_normalized = dir_pp / dir_pp.norm(dim=1, keepdim=True)
+                sh2rgb = eval_sh(pc.active_sh_degree, shs_view, dir_pp_normalized)
+                colors_precomp = torch.clamp_min(sh2rgb + 0.5, 0.0)
+            else:
+                shs = pc.get_features
         else:
-            shs = pc.get_features
+            if hasattr(pc, 'get_mlp_color'):
+                colors_precomp = pc.get_mlp_color(viewpoint_camera)
+            elif hasattr(pc, 'mlp_colors') and pc.mlp_colors is not None:
+                colors_precomp = pc.mlp_colors
+    # If colors_precomp WAS passed as an argument, we skip calculations and set shs to None
     else:
-        if hasattr(pc, 'get_mlp_color'):
-            # We are in the Frontend/Backend process (Full Model)
-            colors_precomp = pc.get_mlp_color(viewpoint_camera)
-        elif hasattr(pc, 'mlp_colors') and pc.mlp_colors is not None:
-            # We are in the GUI process (Packet)
-            colors_precomp = pc.mlp_colors
+        shs = None
+    # ---------------------------
 
     # Rasterize visible Gaussians to image, obtain their radii (on screen).
     if mask is not None:
         rendered_image, radii, depth, opacity = rasterizer(
             means3D=means3D[mask],
             means2D=means2D[mask],
-            shs=shs[mask],
+            shs=shs[mask] if shs is not None else None, # Added safety check
             colors_precomp=colors_precomp[mask] if colors_precomp is not None else None,
             opacities=opacity[mask],
-            scales=scales[mask],
-            rotations=rotations[mask],
+            scales=scales[mask] if scales is not None else None,
+            rotations=rotations[mask] if rotations is not None else None,
             cov3D_precomp=cov3D_precomp[mask] if cov3D_precomp is not None else None,
             theta=viewpoint_camera.cam_rot_delta,
             rho=viewpoint_camera.cam_trans_delta,
@@ -144,8 +142,6 @@ def render(
             rho=viewpoint_camera.cam_trans_delta,
         )
 
-    # Those Gaussians that were frustum culled or had a radius of 0 were not visible.
-    # They will be excluded from value updates used in the splitting criteria.
     return {
         "render": rendered_image,
         "viewspace_points": screenspace_points,

@@ -118,7 +118,7 @@ class GaussianModel:
         features_dc = self._features_dc[:, 0, :]
         features_rest = self._features_rest[:, 0, :]
         return features_dc, features_rest
-    
+
     @property
     def get_opacity(self):
         return self.opacity_activation(self._opacity)
@@ -260,7 +260,7 @@ class GaussianModel:
         new_features_dc = nn.Parameter(
             features[:, :, 0:1].transpose(1, 2).contiguous().requires_grad_(True)
         )
-        
+
         if self.use_mlp:
             color_feat_length = self.config['mlp_opt_params']['color_feat_opt']['feat_len']
             color_feat_sigma = self.config['mlp_opt_params']['color_feat_opt']['feat_init_sigma']
@@ -333,22 +333,22 @@ class GaussianModel:
 
             # 1. The Global MLP weights (F_theta)
             l.append({
-                "params": list(self.color_mlp.parameters()), 
-                "lr": mlp_lr, 
+                "params": list(self.color_mlp.parameters()),
+                "lr": mlp_lr,
                 "lr_init": mlp_lr, # Stored for scheduler
                 "name": "color_mlp"
             })
             # 2. Per-Gaussian Color Biases (b_i)
             l.append({
                 "params": [self._features_dc], #_color_features
-                "lr": bias_lr, 
+                "lr": bias_lr,
                 "lr_init": bias_lr, # Stored for scheduler
                 "name": "f_dc"
             })
             # 3. Per-Gaussian Color Features (f_i)
             l.append({
                 "params": [self._features_rest], #_color_biases
-                "lr": feat_lr, 
+                "lr": feat_lr,
                 "lr_init": feat_lr, # Stored for scheduler
                 "name": "f_rest"
             })
@@ -374,7 +374,7 @@ class GaussianModel:
         """Learning rate scheduling per step"""
         for param_group in self.optimizer.param_groups:
             name = param_group["name"]
-            
+
             if name == "xyz":
                 lr = helper(
                     iteration,
@@ -384,13 +384,13 @@ class GaussianModel:
                     max_steps=self.max_steps,
                 )
                 param_group["lr"] = lr
-                
+
             elif name in ["color_mlp", "f_dc", "f_rest"] and self.use_mlp:
                 # Ensure these were stored in self during training_setup
                 # LE3D uses 1e-4 for MLP/Bias and 2e-3 for Features
                 lr_init = param_group.get("lr_init", param_group["lr"])
                 lr_final = 1.0e-5
-                
+
                 lr = get_cosine_lr(iteration, lr_init, lr_final, self.max_steps)
                 param_group["lr"] = lr
 
@@ -459,6 +459,15 @@ class GaussianModel:
         optimizable_tensors = self.replace_tensor_to_optimizer(opacities_new, "opacity")
         self._opacity = optimizable_tensors["opacity"]
 
+    def load_mlp_weights(self, model_path):
+        mlp_path = os.path.join(model_path, "color_mlp.pth")
+        if os.path.exists(mlp_path):
+            checkpoint = torch.load(mlp_path)
+            self.color_mlp.load_state_dict(checkpoint)
+            self.color_mlp.cuda()
+            self.color_mlp.eval()
+            print(f"  > Loaded MLP weights from {mlp_path}")
+
     def load_ply(self, path):
         plydata = PlyData.read(path)
 
@@ -471,81 +480,60 @@ class GaussianModel:
             return BasicPointCloud(points=positions, colors=colors, normals=normals)
 
         self.ply_input = fetchPly_nocolor(path)
-        xyz = np.stack(
-            (
-                np.asarray(plydata.elements[0]["x"]),
-                np.asarray(plydata.elements[0]["y"]),
-                np.asarray(plydata.elements[0]["z"]),
-            ),
-            axis=1,
-        )
+
+        # 1. Load Geometry
+        xyz = np.stack((
+            np.asarray(plydata.elements[0]["x"]),
+            np.asarray(plydata.elements[0]["y"]),
+            np.asarray(plydata.elements[0]["z"]),
+        ), axis=1)
         opacities = np.asarray(plydata.elements[0]["opacity"])[..., np.newaxis]
 
+        # 2. Load DC Features (Bias for MLP or Base Color for SH)
         features_dc = np.zeros((xyz.shape[0], 3, 1))
         features_dc[:, 0, 0] = np.asarray(plydata.elements[0]["f_dc_0"])
         features_dc[:, 1, 0] = np.asarray(plydata.elements[0]["f_dc_1"])
         features_dc[:, 2, 0] = np.asarray(plydata.elements[0]["f_dc_2"])
 
-        extra_f_names = [
-            p.name
-            for p in plydata.elements[0].properties
-            if p.name.startswith("f_rest_")
-        ]
+        # 3. Load Rest Features (Extra latents for MLP or SH coefficients)
+        extra_f_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("f_rest_")]
         extra_f_names = sorted(extra_f_names, key=lambda x: int(x.split("_")[-1]))
-        if self.use_mlp:
-            assert len(extra_f_names) == 3 * (self.max_sh_degree + 1) ** 2 - 3
+
         features_extra = np.zeros((xyz.shape[0], len(extra_f_names)))
         for idx, attr_name in enumerate(extra_f_names):
             features_extra[:, idx] = np.asarray(plydata.elements[0][attr_name])
-        # Reshape (P,F*SH_coeffs) to (P, F, SH_coeffs except DC)
-        features_extra = features_extra.reshape(
-            (features_extra.shape[0], 3, (self.max_sh_degree + 1) ** 2 - 1)
-        )
 
-        scale_names = [
-            p.name
-            for p in plydata.elements[0].properties
-            if p.name.startswith("scale_")
-        ]
-        scale_names = sorted(scale_names, key=lambda x: int(x.split("_")[-1]))
+        # UNIVERSAL RESHAPE LOGIC
+        num_points = features_extra.shape[0]
+        total_extra_feats = features_extra.shape[1]
+
+        if self.use_mlp or (total_extra_feats % 3 != 0):
+            # If MLP or if the features don't divide by 3 (RGB),
+            # treat as a single feature block (N, 1, Feat_Dim)
+            features_extra = features_extra.reshape((num_points, 1, total_extra_feats))
+        else:
+            # Standard SH: divide features into 3 color channels
+            coeffs_per_channel = total_extra_feats // 3
+            features_extra = features_extra.reshape((num_points, 3, coeffs_per_channel))
+        # 4. Load Scale/Rotation
+        scale_names = sorted([p.name for p in plydata.elements[0].properties if p.name.startswith("scale_")], key=lambda x: int(x.split("_")[-1]))
         scales = np.zeros((xyz.shape[0], len(scale_names)))
         for idx, attr_name in enumerate(scale_names):
             scales[:, idx] = np.asarray(plydata.elements[0][attr_name])
 
-        rot_names = [
-            p.name for p in plydata.elements[0].properties if p.name.startswith("rot")
-        ]
-        rot_names = sorted(rot_names, key=lambda x: int(x.split("_")[-1]))
+        rot_names = sorted([p.name for p in plydata.elements[0].properties if p.name.startswith("rot")], key=lambda x: int(x.split("_")[-1]))
         rots = np.zeros((xyz.shape[0], len(rot_names)))
         for idx, attr_name in enumerate(rot_names):
             rots[:, idx] = np.asarray(plydata.elements[0][attr_name])
 
-        self._xyz = nn.Parameter(
-            torch.tensor(xyz, dtype=torch.float, device="cuda").requires_grad_(True)
-        )
-        self._features_dc = nn.Parameter(
-            torch.tensor(features_dc, dtype=torch.float, device="cuda")
-            .transpose(1, 2)
-            .contiguous()
-            .requires_grad_(True)
-        )
-        self._features_rest = nn.Parameter(
-            torch.tensor(features_extra, dtype=torch.float, device="cuda")
-            .transpose(1, 2)
-            .contiguous()
-            .requires_grad_(True)
-        )
-        self._opacity = nn.Parameter(
-            torch.tensor(opacities, dtype=torch.float, device="cuda").requires_grad_(
-                True
-            )
-        )
-        self._scaling = nn.Parameter(
-            torch.tensor(scales, dtype=torch.float, device="cuda").requires_grad_(True)
-        )
-        self._rotation = nn.Parameter(
-            torch.tensor(rots, dtype=torch.float, device="cuda").requires_grad_(True)
-        )
+        # 5. Initialize Tensors
+        self._xyz = nn.Parameter(torch.tensor(xyz, dtype=torch.float, device="cuda").requires_grad_(True))
+        self._features_dc = nn.Parameter(torch.tensor(features_dc, dtype=torch.float, device="cuda").transpose(1, 2).contiguous().requires_grad_(True))
+        self._features_rest = nn.Parameter(torch.tensor(features_extra, dtype=torch.float, device="cuda").transpose(1, 2).contiguous().requires_grad_(True))
+        self._opacity = nn.Parameter(torch.tensor(opacities, dtype=torch.float, device="cuda").requires_grad_(True))
+        self._scaling = nn.Parameter(torch.tensor(scales, dtype=torch.float, device="cuda").requires_grad_(True))
+        self._rotation = nn.Parameter(torch.tensor(rots, dtype=torch.float, device="cuda").requires_grad_(True))
+
         self.active_sh_degree = self.max_sh_degree
         self.max_radii2D = torch.zeros((self._xyz.shape[0]), device="cuda")
         self.unique_kfIDs = torch.zeros((self._xyz.shape[0]))
@@ -557,10 +545,10 @@ class GaussianModel:
             if group["name"] == name:
                 old_param = group["params"][0]
                 stored_state = self.optimizer.state.get(old_param, None)
-                
+
                 if old_param in self.optimizer.state:
                     del self.optimizer.state[old_param]
-                
+
                 new_param = nn.Parameter(tensor.requires_grad_(True))
                 group["params"][0] = new_param
                 
@@ -575,7 +563,7 @@ class GaussianModel:
                     self.optimizer.state[new_param] = {
                         "exp_avg": torch.zeros_like(tensor),
                         "exp_avg_sq": torch.zeros_like(tensor),
-                        "step": torch.tensor(0.0, device="cuda") 
+                        "step": torch.tensor(0.0, device="cuda")
                     }
 
                 optimizable_tensors[group["name"]] = new_param
@@ -824,6 +812,6 @@ class GaussianModel:
         v = dir_pp / dir_pp.norm(dim=1, keepdim=True) # Normalized viewing direction (d)
 
         # 3. MLP Forward Pass
-        colors_precomp = self.color_mlp(f_i, v) 
+        colors_precomp = self.color_mlp(f_i, v)
 
         return colors_precomp
