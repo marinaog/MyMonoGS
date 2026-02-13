@@ -177,3 +177,104 @@ def get_median_depth(depth, opacity=None, mask=None, return_std=False):
     if return_std:
         return valid_depth.median(), valid_depth.std(), valid
     return valid_depth.median()
+
+def get_reg_loss(self, gaussians, viewpoint, render_pkg, config):
+    # NearFarReg
+    loss_nearfar = get_loss_nearfar(self, gaussians, viewpoint, render_pkg)
+
+    # DistortionReg
+    loss_dist = get_loss_dist(gaussians, viewpoint, render_pkg, config)  
+
+    return 0.1 * loss_dist + 0.01 * loss_nearfar
+
+def get_loss_nearfar(self, gaussians, viewpoint, render_pkg):
+    H, W = viewpoint.image_height, viewpoint.image_width
+    near_far_indexes = render_pkg['near_idx'].detach(), render_pkg['far_idx'].detach()
+
+    near_far_pack = render_near_far(self, gaussians, viewpoint, near_far_indexes, shape=(H, W))
+    near   = near_far_pack['near']
+    far    = near_far_pack['far']
+    near_T = near_far_pack['near_final_opacity']
+    far_T  = near_far_pack['far_final_opacity']
+
+    if near.ndim == 3: near = near.squeeze(0)
+    if far.ndim == 3: far = far.squeeze(0)
+    if near_T.ndim == 3: near_T = near_T.squeeze(0)
+    if far_T.ndim == 3: far_T = far_T.squeeze(0)
+
+    with torch.no_grad():
+        max_near = near.max().item()
+        max_far = far.max().item()
+        min_near_T = near_T.min().item()
+        
+        # Si detectamos valores sospechosos, imprimimos
+        if max_near > 100 or max_far > 100 or torch.isnan(near).any():
+            print(f"\n[DEBUG Near-Far] Val_Max: Near={max_near:.2f}, Far={max_far:.2f}")
+            print(f"[DEBUG Near-Far] Opacidad Min: {min_near_T:.6f}")
+    near   = near / (near_T + 1e-6)
+    far    = far / (far_T + 1e-6)
+    mask = ~((torch.isnan(near) | torch.isinf(near)) | (torch.isnan(far) | torch.isinf(far)))
+    l_near_far_reg = torch.abs(near[mask] - far[mask]) * near_T[mask] * far_T[mask]
+    # l_near_far_reg = weight_reduce_loss(l_near_far_reg, weight, reduction=self.reduction)
+    final_loss = l_near_far_reg.mean()
+    if final_loss > 10.0 or torch.isnan(final_loss):
+        print(f"⚠️ Alerta Loss: {final_loss.item():.4f} | Probable causa de colapso")
+    return l_near_far_reg.clamp(max=10.0).mean()
+
+def get_loss_dist(gaussians, viewpoint, render_pkg, config, res_scale=0.5):
+    from gaussian_splatting.gaussian_renderer import render_depth_raywise, render_hist
+    assert 'near_idx' in render_pkg and 'far_idx' in render_pkg
+    H, W = int(viewpoint.image_height * res_scale), int(viewpoint.image_width * res_scale)
+    bins = config["Training"].get("bins", 64)
+
+    with torch.no_grad():
+        # render_depth_raywise proyecta los centros de los Gaussians a la cámara
+        xx, yy, zz, pixel_filter = render_depth_raywise(gaussians, viewpoint, shape=(H, W), return_filter=True, return_all=True)
+        visible_zz = zz[pixel_filter]
+        # Si no hay puntos visibles, evitamos el crash
+        near_val = max(0.2, visible_zz.min().item()) if visible_zz.numel() > 0 else 0.2
+        far_val  = min(1000.0, visible_zz.max().item()) if visible_zz.numel() > 0 else 1000.0
+        
+    out_pkg = render_hist(gaussians, viewpoint, bins, (H, W), (near_val, far_val))
+    
+    hist = out_pkg['render']
+    curr_rays = hist.permute(1, 2, 0).reshape(-1, bins)
+
+    loss_dist = dist_loss(near_val, far_val, curr_rays, inter_weight=1.0, intra_weight=1.0)
+    return loss_dist.mean()
+
+
+def render_near_far(self, gs_model, viewpoint_camera, near_far_indexes, shape=None):
+    from gaussian_splatting.gaussian_renderer import render_depth_with_filter
+    with torch.no_grad():
+        near_indexes = near_far_indexes[0]
+        far_indexes = near_far_indexes[1]
+        uniq_near_indexes = torch.unique(near_indexes[near_indexes != -1]).long()
+        uniq_far_indexes = torch.unique(far_indexes[far_indexes != -1]).long()
+        near_masks = torch.zeros_like(gs_model._opacity).squeeze()
+        near_masks[uniq_near_indexes] = 1
+        far_masks  = torch.zeros_like(gs_model._opacity).squeeze()
+        far_masks[uniq_far_indexes] = 1
+        near_masks = near_masks.bool()
+        far_masks  = far_masks.bool()
+
+    far_pack  = render_depth_with_filter(gs_model, viewpoint_camera, far_masks,  self.background, shape=shape)
+    near_pack = render_depth_with_filter(gs_model, viewpoint_camera, near_masks, self.background, shape=shape)
+
+    return {'near': near_pack['render'],
+            'near_final_opacity': near_pack['final_opacity'],
+            'far': far_pack['render'],
+            'far_final_opacity': far_pack['final_opacity']}
+
+
+def dist_loss(near, far, ws, inter_weight=1.0, intra_weight=1.0, eps=torch.finfo(torch.float32).eps):
+    g = lambda x : 1 / x
+    bins = ws.size(1)
+    t = torch.linspace(near+eps, far, bins+1, device=ws.device)  # same naming as multinerf
+    s = (g(t) - g(near+eps)) / (g(far) - g(near+eps))            # convert t to s
+    us = (s[1:] + s[:-1]) / 2
+    dus = torch.abs(us[:, None] - us[None, :])
+    loss_inter = torch.sum(ws * torch.sum(ws[..., None, :] * dus[None, ...], dim=-1), dim=-1)
+    ds = s[1:] - s[:-1]
+    loss_intra = torch.sum(ws**2 * ds[None, :], dim=-1) / 3
+    return loss_inter * inter_weight + loss_intra * intra_weight
