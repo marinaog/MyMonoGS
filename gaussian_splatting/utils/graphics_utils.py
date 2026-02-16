@@ -32,24 +32,27 @@ def getWorld2View(R, t):
 
 def getWorld2View2(R, t, translate=torch.tensor([0.0, 0.0, 0.0]), scale=1.0):
     translate = translate.to(R.device)
-    Rt = torch.zeros((4, 4), device=R.device)
-    # Rt[:3, :3] = R.transpose()
+    Rt = torch.eye(4, device=R.device) # Initialize as Identity
     Rt[:3, :3] = R
     Rt[:3, 3] = t
-    Rt[3, 3] = 1.0
 
     try:
+        # Check for NaNs or Infs first (very common in RAW training)
+        if not torch.isfinite(Rt).all():
+            raise torch._C._LinAlgError("Non-finite values in Rt")
+
         C2W = torch.linalg.inv(Rt)
         cam_center = C2W[:3, 3]
         cam_center = (cam_center + translate) * scale
         C2W[:3, 3] = cam_center
         return torch.linalg.inv(C2W)
+    
     except torch._C._LinAlgError:
-        # If singular, the optimizer likely pushed R/t too far.
-        # Fallback: add a tiny bit of noise to the diagonal or return identity
-        print("Warning: Singular matrix at frame 68. Optimization collapsed.")
-        Rt[0:3, 0:3] += torch.eye(3, device=R.device) * 1e-6
-        return torch.linalg.inv(Rt) # Attempt safe return
+        print("Warning: Optimization collapsed. Resetting to valid state.")
+        # FALLBACK: Create a valid, basic pose so the program doesn't crash
+        # You could also return a copy of the last known good R and t here.
+        safe_Rt = torch.eye(4, device=R.device)
+        return safe_Rt
 
 
 def getProjectionMatrix(znear, zfar, fovX, fovY):
