@@ -10,7 +10,7 @@ from gaussian_splatting.utils.loss_utils import l1_loss, rawnerf_loss, ssim
 from utils.logging_utils import Log
 from utils.multiprocessing_utils import clone_obj
 from utils.pose_utils import update_pose
-from utils.slam_utils import get_loss_mapping
+from utils.slam_utils import get_loss_mapping, get_reg_loss
 
 
 class BackEnd(mp.Process):
@@ -239,6 +239,11 @@ class BackEnd(mp.Process):
             scaling = self.gaussians.get_scaling
             isotropic_loss = torch.abs(scaling - scaling.mean(dim=1).view(-1, 1))
             loss_mapping += 10 * isotropic_loss.mean()
+
+            if self.config["pipeline_params"].get("use_reg"): # and self.iteration_count > 500:
+                reg_viewpoint = random.choice(keyframes_opt + random_viewpoint_stack)
+                loss_mapping += get_reg_loss(self, self.gaussians, reg_viewpoint, render_pkg, self.config)
+
             loss_mapping.backward()
 
             if self.config["Results"].get("use_wandb") and self.iteration_count % 10 == 0:

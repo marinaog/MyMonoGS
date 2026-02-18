@@ -177,3 +177,48 @@ def get_median_depth(depth, opacity=None, mask=None, return_std=False):
     if return_std:
         return valid_depth.median(), valid_depth.std(), valid
     return valid_depth.median()
+
+
+def dist_loss(near, far, ws, inter_weight=1.0, intra_weight=1.0, eps=torch.finfo(torch.float32).eps):
+    g = lambda x : 1 / x
+    bins = ws.size(1)
+    t = torch.linspace(near+eps, far, bins+1, device=ws.device)  # same naming as multinerf
+    s = (g(t) - g(near+eps)) / (g(far) - g(near+eps))            # convert t to s
+    us = (s[1:] + s[:-1]) / 2
+    dus = torch.abs(us[:, None] - us[None, :])
+    loss_inter = torch.sum(ws * torch.sum(ws[..., None, :] * dus[None, ...], dim=-1), dim=-1)
+    ds = s[1:] - s[:-1]
+    loss_intra = torch.sum(ws**2 * ds[None, :], dim=-1) / 3
+    return loss_inter * inter_weight + loss_intra * intra_weight
+
+
+def get_loss_dist(gaussians, viewpoint, render_pkg, config, res_scale=0.5):
+    from gaussian_splatting.gaussian_renderer import render_depth_raywise, render_hist
+    H, W = int(viewpoint.image_height * res_scale), int(viewpoint.image_width * res_scale)
+    bins = config["Training"].get("bins", 64)
+
+    with torch.no_grad():
+        # render_depth_raywise proyecta los centros de los Gaussians a la cámara
+        xx, yy, zz, pixel_filter = render_depth_raywise(gaussians, viewpoint, shape=(H, W), return_filter=True, return_all=True)
+        visible_zz = zz[pixel_filter]
+        # Si no hay puntos visibles, evitamos el crash
+        near_val = max(0.2, visible_zz.min().item()) if visible_zz.numel() > 0 else 0.2
+        far_val  = min(1000.0, visible_zz.max().item()) if visible_zz.numel() > 0 else 1000.0
+        
+    out_pkg = render_hist(gaussians, viewpoint, bins, (H, W), (near_val, far_val))
+    
+    hist = out_pkg['render']
+    curr_rays = hist.permute(1, 2, 0).reshape(-1, bins)
+
+    loss_dist = dist_loss(near_val, far_val, curr_rays, inter_weight=1.0, intra_weight=1.0)
+    return loss_dist.mean()
+
+
+def get_reg_loss(self, gaussians, viewpoint, render_pkg, config):
+    # NearFarReg
+    #loss_nearfar = get_loss_nearfar(self, gaussians, viewpoint, render_pkg)
+
+    # DistortionReg
+    loss_dist = get_loss_dist(gaussians, viewpoint, render_pkg, config)  
+
+    return 0.1 * loss_dist #+ 0.01 * loss_nearfar

@@ -20,6 +20,12 @@ from diff_gaussian_rasterization import (
 from gaussian_splatting.scene.gaussian_model import GaussianModel
 from gaussian_splatting.utils.sh_utils import eval_sh
 
+from gaussian_splatting.utils.graphics_utils import fov2focal
+from hist_rasterization import (
+    GaussianRasterizationSettings as GaussianRasterizationSettings32,
+    GaussianRasterizer as GaussianRasterizer32
+)
+
 def render(
     viewpoint_camera,
     pc: GaussianModel,
@@ -151,3 +157,92 @@ def render(
         "opacity": opacity,
         "n_touched": n_touched,
     }
+
+def render_depth_raywise(gs_model, viewpoint_camera, shape=None, return_filter=False, return_all=False):
+    H, W = shape if shape is not None else (viewpoint_camera.image_height, viewpoint_camera.image_width)
+    
+    w2c = viewpoint_camera.world_view_transform.transpose(0, 1)
+    point_at_cam_view = (w2c[:3, :3] @ gs_model.get_xyz.transpose(0, 1) + w2c[:3, -1:]).transpose(0, 1)
+    point_z = point_at_cam_view[:, -1:]
+
+    focal_x = fov2focal(viewpoint_camera.FoVx, W)
+    focal_y = fov2focal(viewpoint_camera.FoVy, H)
+    c2i = torch.tensor([[focal_x, 0, W / 2], [0, focal_y, H / 2], [0, 0, 1]], device=point_z.device)
+    
+    point_at_im_view = (c2i @ point_at_cam_view.transpose(0, 1)).transpose(0, 1)
+    point_at_im_view = (point_at_im_view / point_at_im_view[:, -1:]).round().long()
+    
+    x, y = point_at_im_view[:, 0], point_at_im_view[:, 1]
+    
+    pixel_filter = None
+    if (not return_all) or return_filter:
+        pixel_filter = (x >= 0) & (x < W) & (y >= 0) & (y < H)
+
+    if return_all:
+        res = [x, y, point_z.squeeze()]
+        if return_filter:
+            res.append(pixel_filter) # Añadimos el 4º valor si se pide
+        return res
+    
+    res = [x[pixel_filter], y[pixel_filter], point_z.squeeze()[pixel_filter]]
+    if return_filter:
+        res.append(pixel_filter)
+    return res
+
+def render_hist(gs_model, viewpoint_camera, num_bins=128, shape=None, near_far=None, scaling_modifier=1.0):
+    NUM_CHANNELS = 32
+    assert num_bins % NUM_CHANNELS == 0, 'num_bins must be divisible by 32!'
+
+    w2c = viewpoint_camera.world_view_transform.transpose(0, 1)
+    point_at_cam_view = (w2c[:3, :3] @ gs_model.get_xyz.transpose(0, 1) + w2c[:3, -1:]).transpose(0, 1)
+    point_z = point_at_cam_view[:, -1]
+
+    screenspace_points = torch.zeros_like(gs_model.get_xyz, requires_grad=True)
+    try: screenspace_points.retain_grad()
+    except: pass
+
+    H, W = shape if shape is not None else (int(viewpoint_camera.image_height), int(viewpoint_camera.image_width))
+    raster_settings = GaussianRasterizationSettings32(
+        image_height=H, image_width=W, tanfovx=math.tan(viewpoint_camera.FoVx * 0.5),
+        tanfovy=math.tan(viewpoint_camera.FoVy * 0.5), bg=torch.zeros(NUM_CHANNELS, device=point_z.device),
+        scale_modifier=scaling_modifier, viewmatrix=viewpoint_camera.world_view_transform,
+        projmatrix=viewpoint_camera.full_proj_transform, sh_degree=gs_model.active_sh_degree,
+        campos=viewpoint_camera.camera_center, prefiltered=False
+    )
+
+    rasterizer = GaussianRasterizer32(raster_settings=raster_settings)
+
+    with torch.no_grad():
+        near = max(point_z.min().item(), 0) if near_far is None else near_far[0]
+        far = point_z.max().item() if near_far is None else near_far[1]
+        z_blocksize = (far - near) / (num_bins - 1)
+        point_z_block = torch.floor((point_z - near) / z_blocksize).long().clip(0, num_bins - 1)
+        colors_precomp = torch.nn.functional.one_hot(point_z_block, num_classes=num_bins).float()
+        if near_far is None:
+            colors_precomp[(point_z < near) | (point_z > far), :] = 0
+
+    common_args = {
+        "means3D": gs_model.get_xyz, "means2D": screenspace_points, "shs": None,
+        "opacities": gs_model.get_opacity, "scales": gs_model.get_scaling,
+        "rotations": gs_model.get_rotation, "cov3D_precomp": None
+    }
+
+    if num_bins == NUM_CHANNELS:
+        rendered_image, radii, _ = rasterizer(colors_precomp=colors_precomp, **common_args)
+        return {"render": rendered_image, "near": near, "far": far, "radii": radii, "visibility_filter": radii > 0}
+    else:
+        rendered_hist = []
+        for i in range(num_bins // NUM_CHANNELS):
+            curr_colors = colors_precomp[:, i*NUM_CHANNELS : (i+1)*NUM_CHANNELS]
+            res = rasterizer(colors_precomp=curr_colors, **common_args)
+            rendered_image = res[0]
+            radii = res[1]
+            rendered_hist.append(rendered_image)
+        return {
+            "render": torch.cat(rendered_hist),
+            "near": near, 
+            "far": far,
+            "viewspace_points": screenspace_points,
+            "visibility_filter" : radii > 0,
+            "radii": radii
+        }
