@@ -1,0 +1,6 @@
+# ninja log v5
+0	2865	1770894970506906702	/home/marina/PhD/RawSLAM/MyMonoGS/submodules/hist-rasterization/build/temp.linux-x86_64-cpython-312/cuda_rasterizer/forward.o	24e393ac20eccc95
+0	2915	1770894970557906706	/home/marina/PhD/RawSLAM/MyMonoGS/submodules/hist-rasterization/build/temp.linux-x86_64-cpython-312/cuda_rasterizer/backward.o	bec3e1456b41be09
+0	8994	1770894976633907225	/home/marina/PhD/RawSLAM/MyMonoGS/submodules/hist-rasterization/build/temp.linux-x86_64-cpython-312/cuda_rasterizer/rasterizer_impl.o	94a0095fbc8f902c
+0	17012	1770894984645856176	/home/marina/PhD/RawSLAM/MyMonoGS/submodules/hist-rasterization/build/temp.linux-x86_64-cpython-312/ext.o	cea08e643a2bec9e
+1	28053	1770894995684795444	/home/marina/PhD/RawSLAM/MyMonoGS/submodules/hist-rasterization/build/temp.linux-x86_64-cpython-312/rasterize_points.o	b39b753e865564e4
