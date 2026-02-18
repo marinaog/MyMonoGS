@@ -267,6 +267,8 @@ if __name__ == "__main__":
             suffix = "_raw" if config["Dataset"].get("raw", False) else "_srgb"
             if config["Training"].get("loss"):
                 suffix += "_loss" if config["Training"]["loss"] == "rawnerf" else ""
+                if config["pipeline_params"]["use_reg"]:
+                    suffix += "_reg"
             save_dir_base = os.path.join(base_results_dir, f"{dataset_group}/{scene_name}{suffix}")
 
             save_dir = save_dir_base
