@@ -38,14 +38,12 @@ def l1_loss_weight(network_output, gt):
 def l2_loss(network_output, gt):
     return ((network_output - gt) ** 2).mean()
 
-def rawnerf_loss(render, gt, mask=None, eps=1e-2):
+def rawnerf_loss(rgb_render_clip, gt, mask=None, eps=1e-2):
     """
     Reweighted L2 loss based on the gradient of the log tonemapping curve.
     This effectively penalizes relative error rather than absolute error.
     """
     # 1. Comparison in linear space
-    # Clamp to avoid extreme outliers if necessary, but keep it linear
-    rgb_render_clip = torch.clamp(render, max=1.0)
     resid_sq = (rgb_render_clip - gt) ** 2
     
     # 2. Scaling by the gradient of the log curve: 1 / (x + eps)
