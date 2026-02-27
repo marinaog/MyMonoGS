@@ -54,7 +54,7 @@ class SLAM:
             self.raw = True
             if 'Training' in config.keys() and config['Training'].get('loss'):
                 loss_type = config['Training']['loss']
-                print(f"Using 16 bits raw data, a {loss_type} loss and alpha = {config['Training']['alpha']}")
+            print(f"Using 16 bits raw data, a {loss_type} loss and alpha = {config['Training']['alpha']}")
         else:
             print(f'Using 8 bits sRGB data, a {loss_type} loss')
 
@@ -265,8 +265,15 @@ if __name__ == "__main__":
             dataset_group = "_".join(path_parts[:-1])  # "datasets_rawslam"
 
             suffix = "_raw" if config["Dataset"].get("raw", False) else "_srgb"
-            if config["Training"].get("loss"):
-                suffix += "_loss" if config["Training"]["loss"] == "rawnerf" else ""
+
+            if config["Training"].get("loss", False) and config["Training"]["loss"] == "rawnerf":
+                suffix += "_l2"
+            else:
+                suffix += "_l1"
+            if config["pipeline_params"].get("use_mlp", False):
+                suffix += "_mlp"
+            if config["pipeline_params"].get("use_reg", False):
+                suffix += "_reg"
             save_dir_base = os.path.join(base_results_dir, f"{dataset_group}/{scene_name}{suffix}")
 
             save_dir = save_dir_base
