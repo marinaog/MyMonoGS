@@ -122,7 +122,7 @@ def raw2normal(img, is_torch=False):
     if is_torch:
         bright_factor = 0.98 / torch.quantile(img, 0.99)
         img = torch.clamp(img * bright_factor, 0.0, 1.0)
-        
+
         gamma = 2.4
         slope = 12.92
         threshold = 0.04045 / slope
@@ -137,11 +137,11 @@ def raw2normal(img, is_torch=False):
     else:
         bright_factor = 0.98 / (np.percentile(img, 99) + 1e-6)
         img = np.clip(img * bright_factor, 0, 1)
-        
+
         gamma = 2.4
         slope = 12.92
         threshold = (0.04045 / slope)
-        low = img <= threshold 
+        low = img <= threshold
         high = img > threshold
         out = np.zeros_like(img)
         out[low] = img[low] * slope
@@ -159,16 +159,23 @@ def eval_rendering(
     iteration="final",
     raw=False,
 ):
-    interval = 1
+    interval = 5
+    saved_frame_idx = []
+    end_idx = len(frames) - 1 if iteration == "final" or "before_opt" else iteration
+    psnr_array, ssim_array, lpips_array = [], [], []
+    depth_l1 = []
+
     save_dir = Path(save_dir)
 
     (save_dir / "renders").mkdir(parents=True, exist_ok=True)
     (save_dir / "gt").mkdir(parents=True, exist_ok=True)
+
     print('Saving it ', save_dir)
-    img_pred, img_gt, saved_frame_idx = [], [], []
-    end_idx = len(frames) - 1 if iteration == "final" or "before_opt" else iteration
-    psnr_array, ssim_array, lpips_array = [], [], []
-    depth_l1 = []
+    if raw:
+        psnr_array_raw, ssim_array_raw = [], []
+        (save_dir / "renders/renders_raw").mkdir(parents=True, exist_ok=True)
+        (save_dir / "renders/gt_raw").mkdir(parents=True, exist_ok=True)
+
     cal_lpips = LearnedPerceptualImagePatchSimilarity(
         net_type="alex", normalize=True
     ).to("cuda")
@@ -178,6 +185,7 @@ def eval_rendering(
         saved_frame_idx.append(idx)
         frame = frames[idx]
         gt_image, _, _ = dataset[idx]
+        mask = gt_image > 0
 
         render_pkg = render(frame, gaussians, pipe, background)
         depth = render_pkg["depth"]
@@ -193,11 +201,29 @@ def eval_rendering(
             pred = (image.detach().cpu().numpy().transpose((1, 2, 0)) * 65535).astype(
                 np.uint16
             )
-            gt = raw2normal(gt)
-            gt = (gt * 255).astype(np.uint8)
-            pred = raw2normal(pred)
-            pred = (pred * 255).astype(np.uint8)
-        else: 
+
+            # Compute PSNR in RAW space
+            psnr_raw_score = psnr((image[mask]).unsqueeze(0), (gt_image[mask]).unsqueeze(0))
+            psnr_array_raw.append(psnr_raw_score.item())
+
+            # Compute SSIM in RAW space
+            ssim_raw_score = ssim((image).unsqueeze(0), (gt_image).unsqueeze(0))
+            ssim_array_raw.append(ssim_raw_score.item())
+
+
+            # Save RAW images
+            gt_raw = cv2.cvtColor(gt, cv2.COLOR_RGB2BGR)
+            pred_raw = cv2.cvtColor(pred, cv2.COLOR_RGB2BGR)
+
+            # Convert RAW to sRGB for normal evaluation
+            gt = (raw2normal(gt.astype(np.uint16)) * 255).astype(np.uint8)
+            pred = (raw2normal(pred.astype(np.uint16)) * 255).astype(np.uint8)
+
+            image = raw2normal(image, is_torch=True)
+            gt_image = raw2normal(gt_image, is_torch=True)
+            mask = gt_image > 0
+
+        else:
             gt = (gt_image.cpu().numpy().transpose((1, 2, 0)) * 255).astype(np.uint8)
             pred = (image.detach().cpu().numpy().transpose((1, 2, 0)) * 255).astype(
                 np.uint8
@@ -207,16 +233,13 @@ def eval_rendering(
         if s == int(len(kf_indices)/5):
             f"Saving img {idx}"
             s=0
+            if raw:
+                cv2.imwrite(str(save_dir / "renders/renders_raw" / f'{idx:05d}.png'), pred_raw)
+                cv2.imwrite(str(save_dir / "renders/gt_raw" / f'{idx:05d}.png'), gt_raw)
+
             cv2.imwrite(str(save_dir / "renders" / f'{idx:05d}.png'), pred)
             cv2.imwrite(str(save_dir / "gt" / f'{idx:05d}.png'), gt)
         s+=1
-        img_pred.append(pred)
-        img_gt.append(gt)
-
-        if raw:
-            gt_image = raw2normal(gt_image, is_torch = True)
-            image = raw2normal(image, is_torch = True)
-        mask = gt_image > 0
 
         psnr_score = psnr((image[mask]).unsqueeze(0), (gt_image[mask]).unsqueeze(0))
         ssim_score = ssim((image).unsqueeze(0), (gt_image).unsqueeze(0))
@@ -233,10 +256,18 @@ def eval_rendering(
     output["depth_l1"] = float(np.mean(depth_l1))
 
     # print("depth_l1",output["depth_l1"])
-    Log(
-        f'depth_l1: {output["depth_l1"]}, mean psnr: {output["mean_psnr"]}, ssim: {output["mean_ssim"]}, lpips: {output["mean_lpips"]}',
-        tag="Eval",
-    )
+    if raw:
+        output["mean_psnr_raw"] = float(np.mean(psnr_array_raw))
+        output["mean_ssim_raw"] = float(np.mean(ssim_array_raw))
+        Log(
+            f'depth_l1: {output["depth_l1"]}, mean psnr_raw: {output["mean_psnr_raw"]}, ssim_raw: {output["mean_ssim_raw"]}, mean psnr: {output["mean_psnr"]}, ssim: {output["mean_ssim"]}, lpips: {output["mean_lpips"]}',
+            tag="Eval",
+        )
+    else:
+        Log(
+            f'depth_l1: {output["depth_l1"]}, mean psnr: {output["mean_psnr"]}, ssim: {output["mean_ssim"]}, lpips: {output["mean_lpips"]}',
+            tag="Eval",
+        )
 
 
     psnr_save_dir = os.path.join(save_dir, "psnr", str(iteration))
@@ -262,16 +293,23 @@ def eval_rendering_both(
     raw=False,
     kf_ind_to_save = None
 ):
-    interval = 1
+    interval = 5
+    saved_frame_idx = []
+    end_idx = len(frames) - 1 if iteration == "final" or "before_opt" else iteration
+    psnr_array, ssim_array, lpips_array = [], [], []
+    depth_l1 = []
+
     save_dir = Path(save_dir)
 
     (save_dir / "renders").mkdir(parents=True, exist_ok=True)
     (save_dir / "gt").mkdir(parents=True, exist_ok=True)
+
     print('Saving it ', save_dir)
-    img_pred, img_gt, saved_frame_idx = [], [], []
-    end_idx = len(frames) - 1 if iteration == "final" or "before_opt" else iteration
-    psnr_array, ssim_array, lpips_array = [], [], []
-    depth_l1 = []
+    if raw:
+        psnr_array_raw, ssim_array_raw = [], []
+        (save_dir / "renders/renders_raw").mkdir(parents=True, exist_ok=True)
+        (save_dir / "renders/gt_raw").mkdir(parents=True, exist_ok=True)
+
     cal_lpips = LearnedPerceptualImagePatchSimilarity(
         net_type="alex", normalize=True
     ).to("cuda")
@@ -281,6 +319,7 @@ def eval_rendering_both(
         saved_frame_idx.append(idx)
         frame = frames[idx]
         gt_image, _, _ = dataset[idx]
+        mask = gt_image > 0
 
         render_pkg = render(frame, gaussians, pipe, background)
         depth = render_pkg["depth"]
@@ -296,11 +335,30 @@ def eval_rendering_both(
             pred = (image.detach().cpu().numpy().transpose((1, 2, 0)) * 65535).astype(
                 np.uint16
             )
-            gt = raw2normal(gt)
-            gt = (gt * 255).astype(np.uint8)
-            pred = raw2normal(pred)
-            pred = (pred * 255).astype(np.uint8)
-        else: 
+
+
+            # Compute PSNR in RAW space
+            psnr_raw_score = psnr((image[mask]).unsqueeze(0), (gt_image[mask]).unsqueeze(0))
+            psnr_array_raw.append(psnr_raw_score.item())
+
+            # Compute SSIM in RAW space
+            ssim_raw_score = ssim((image).unsqueeze(0), (gt_image).unsqueeze(0))
+            ssim_array_raw.append(ssim_raw_score.item())
+
+
+            # Save RAW images
+            gt_raw = cv2.cvtColor(gt, cv2.COLOR_RGB2BGR)
+            pred_raw = cv2.cvtColor(pred, cv2.COLOR_RGB2BGR)
+
+            # Convert RAW to sRGB for normal evaluation
+            gt = (raw2normal(gt.astype(np.uint16)) * 255).astype(np.uint8)
+            pred = (raw2normal(pred.astype(np.uint16)) * 255).astype(np.uint8)
+
+            image = raw2normal(image, is_torch=True)
+            gt_image = raw2normal(gt_image, is_torch=True)
+            mask = gt_image > 0
+
+        else:
             gt = (gt_image.cpu().numpy().transpose((1, 2, 0)) * 255).astype(np.uint8)
             pred = (image.detach().cpu().numpy().transpose((1, 2, 0)) * 255).astype(
                 np.uint8
@@ -309,15 +367,12 @@ def eval_rendering_both(
         pred = cv2.cvtColor(pred, cv2.COLOR_BGR2RGB)
         if idx in kf_ind_to_save:
             f"Saving img {idx}"
+            if raw:
+                cv2.imwrite(str(save_dir / "renders/renders_raw" / f'{idx:05d}.png'), pred_raw)
+                cv2.imwrite(str(save_dir / "renders/gt_raw" / f'{idx:05d}.png'), gt_raw)
+
             cv2.imwrite(str(save_dir / "renders" / f'{idx:05d}.png'), pred)
             cv2.imwrite(str(save_dir / "gt" / f'{idx:05d}.png'), gt)
-        img_pred.append(pred)
-        img_gt.append(gt)
-
-        if raw:
-            gt_image = raw2normal(gt_image, is_torch = True)
-            image = raw2normal(image, is_torch = True)
-        mask = gt_image > 0
 
         psnr_score = psnr((image[mask]).unsqueeze(0), (gt_image[mask]).unsqueeze(0))
         ssim_score = ssim((image).unsqueeze(0), (gt_image).unsqueeze(0))
@@ -334,10 +389,18 @@ def eval_rendering_both(
     output["depth_l1"] = float(np.mean(depth_l1))
 
     # print("depth_l1",output["depth_l1"])
-    Log(
-        f'depth_l1: {output["depth_l1"]}, mean psnr: {output["mean_psnr"]}, ssim: {output["mean_ssim"]}, lpips: {output["mean_lpips"]}',
-        tag="Eval",
-    )
+    if raw:
+        output["mean_psnr_raw"] = float(np.mean(psnr_array_raw))
+        output["mean_ssim_raw"] = float(np.mean(ssim_array_raw))
+        Log(
+            f'depth_l1: {output["depth_l1"]}, mean psnr_raw: {output["mean_psnr_raw"]}, ssim_raw: {output["mean_ssim_raw"]}, mean psnr: {output["mean_psnr"]}, ssim: {output["mean_ssim"]}, lpips: {output["mean_lpips"]}',
+            tag="Eval",
+        )
+    else:
+        Log(
+            f'depth_l1: {output["depth_l1"]}, mean psnr: {output["mean_psnr"]}, ssim: {output["mean_ssim"]}, lpips: {output["mean_lpips"]}',
+            tag="Eval",
+        )
 
 
     psnr_save_dir = os.path.join(save_dir, "psnr", str(iteration))
