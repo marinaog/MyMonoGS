@@ -131,7 +131,7 @@ def eval_rendering(
     raw=False,
 ):
     interval = 5
-    img_pred, img_gt, saved_frame_idx = [], [], []
+    saved_frame_idx = []
     end_idx = len(frames) - 1 if iteration == "final" or "before_opt" else iteration
     psnr_array, ssim_array, lpips_array = [], [], []
 
@@ -142,7 +142,7 @@ def eval_rendering(
 
     print('Saving renders in:', save_dir)
     if raw:
-        img_pred_raw, img_gt_raw, psnr_array_raw = [], [], []
+        psnr_array_raw, ssim_array_raw = [], []
         (save_dir / "renders/renders_raw").mkdir(parents=True, exist_ok=True)
         (save_dir / "renders/gt_raw").mkdir(parents=True, exist_ok=True)
 
@@ -165,19 +165,29 @@ def eval_rendering(
         image = torch.clamp(rendering, 0.0, 1.0)
 
         if raw:
-            # Compute PSNR in RAW space
             gt = (gt_image.cpu().numpy().transpose((1, 2, 0)) * 65535).astype(np.uint16)
             pred = (image.detach().cpu().numpy().transpose((1, 2, 0)) * 65535).astype(np.uint16)
+
+            # Compute PSNR in RAW space
             psnr_raw_score = psnr((image[mask]).unsqueeze(0), (gt_image[mask]).unsqueeze(0))
             psnr_array_raw.append(psnr_raw_score.item())
+
+            # Compute SSIM in RAW space
+            ssim_raw_score = ssim((image).unsqueeze(0), (gt_image).unsqueeze(0))
+            ssim_array_raw.append(ssim_raw_score.item())
+
+
             # Save RAW images
             gt_raw = cv2.cvtColor(gt, cv2.COLOR_RGB2BGR)
             pred_raw = cv2.cvtColor(pred, cv2.COLOR_RGB2BGR)
-            img_pred_raw.append(gt_raw)
-            img_gt_raw.append(pred_raw)
+
             # Convert RAW to sRGB for normal evaluation
             gt = (raw2normal(gt.astype(np.uint16)) * 255).astype(np.uint8)
             pred = (raw2normal(pred.astype(np.uint16)) * 255).astype(np.uint8)
+
+            image = raw2normal(image, is_torch=True)
+            gt_image = raw2normal(gt_image, is_torch=True)
+            mask = gt_image > 0
 
         else:
             gt = (gt_image.cpu().numpy().transpose((1, 2, 0)) * 255).astype(np.uint8)
@@ -190,11 +200,10 @@ def eval_rendering(
             if raw:
                 cv2.imwrite(str(save_dir / "renders/renders_raw" / f'{idx:05d}.png'), pred_raw)
                 cv2.imwrite(str(save_dir / "renders/gt_raw" / f'{idx:05d}.png'), gt_raw)
+
             cv2.imwrite(str(save_dir / "renders/renders" / f'{idx:05d}.png'), pred)
             cv2.imwrite(str(save_dir / "renders/gt" / f'{idx:05d}.png'), gt)
         s+=1
-        img_pred.append(pred)
-        img_gt.append(gt)
 
         psnr_score = psnr((image[mask]).unsqueeze(0), (gt_image[mask]).unsqueeze(0))
         ssim_score = ssim((image).unsqueeze(0), (gt_image).unsqueeze(0))
@@ -213,9 +222,10 @@ def eval_rendering(
 
     if raw:
         output["mean_psnr_raw"] = float(np.mean(psnr_array_raw))
-        wandb.log({"frame_idx": latest_frame_idx, "PSNR_raw": float(np.mean(psnr_array_raw))})
+        output["mean_ssim_raw"] = float(np.mean(ssim_array_raw))
+        wandb.log({"frame_idx": latest_frame_idx, "PSNR_raw": float(np.mean(psnr_array_raw)), "SSIM_raw": float(np.mean(ssim_array_raw))})
         Log(
-        f'mean psnr raw: {output["mean_psnr_raw"]}, mean psnr: {output["mean_psnr"]}, ssim: {output["mean_ssim"]}, lpips: {output["mean_lpips"]}',
+        f'mean psnr raw: {output["mean_psnr_raw"]}, mean ssim raw: {output["mean_ssim_raw"]}, mean psnr: {output["mean_psnr"]}, ssim: {output["mean_ssim"]}, lpips: {output["mean_lpips"]}',
         tag="Eval",
         )
     else:
