@@ -1,8 +1,9 @@
 inherit_from: "configs/rgbd/rawslam/base_config.yaml"
 
 Dataset:
-  dataset_path: "datasets/rawslam/christmas_light"
-  raw: False
+  dataset_path: "datasets/rawslam/christmas"
+  raw: True
+  pcd_downsample: 256
   Calibration:
     fx: 1380.4
     fy: 1379.3
@@ -22,3 +23,9 @@ Dataset:
   Resize:
     desired_width: 320
     desired_height: 180
+
+Training:
+  loss: "rawnerf"
+
+pipeline_params:
+  use_reg: True
