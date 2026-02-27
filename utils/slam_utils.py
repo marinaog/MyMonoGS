@@ -68,21 +68,21 @@ def get_loss_tracking_rgb(config, image, depth, opacity, viewpoint):
     rgb_pixel_mask = (gt_image.sum(dim=0) > rgb_boundary_threshold).view(*mask_shape)
     rgb_pixel_mask = rgb_pixel_mask * viewpoint.grad_mask
     if config.get("Training") and config["Training"].get("loss") == "rawnerf":
-        eps = 1e-2 
+        eps = 1e-2
         rgb_render_clip = torch.clamp(image, max=1.0)
         resid_sq = (rgb_render_clip - gt_image) ** 2
-        
+
         # Scaling by the gradient of the log curve: 1 / (x + eps)
         # We detach the denominator so it acts as a fixed weight per pixel
         scaling_grad = 1.0 / (rgb_render_clip.detach() + eps)
-        
+
         # Apply mask and opacity weighting
         # We include opacity because in tracking, we only want to trust well-reconstructed regions
         loss_rgb = (resid_sq * (scaling_grad ** 2)) * rgb_pixel_mask * opacity
     else:
         # Original L1 loss
         loss_rgb = opacity * torch.abs(image * rgb_pixel_mask - gt_image * rgb_pixel_mask)
-    
+
     return loss_rgb.sum() / (rgb_pixel_mask.sum() + 1e-6)
 
 
@@ -120,17 +120,19 @@ def get_loss_mapping_rgb(config, image, depth, viewpoint):
     rgb_boundary_threshold = config["Training"]["rgb_boundary_threshold"]
 
     rgb_pixel_mask = (gt_image.sum(dim=0) > rgb_boundary_threshold).view(*mask_shape)
-    
+
+    if config["Dataset"]["raw"]:
+        image = torch.clamp(image, max=1.0)
+
     if config["Training"]["loss"] == "rawnerf":
-        rgb_render_clip = torch.clamp(image, max=1.0)
-        resid_sq_clip = (rgb_render_clip - gt_image) ** 2
+        resid_sq_clip = (image - gt_image) ** 2
         resid_sq_clip_masked = resid_sq_clip * rgb_pixel_mask
         # Scale by gradient of log tonemapping curve.
         scaling_grad = 1.0 / (rgb_render_clip.detach() + 1e-2)
         # Reweighted L2 loss.
-        loss_rgb = (resid_sq_clip_masked * scaling_grad**2)     
+        loss_rgb = (resid_sq_clip_masked * scaling_grad**2)
 
-    else: # default and original l1 loss 
+    else: # default and original l1 loss
         loss_rgb = torch.abs(image * rgb_pixel_mask - gt_image * rgb_pixel_mask)
 
     return loss_rgb.sum() / (rgb_pixel_mask.sum() + 1e-6) # So that the mean is only among the valid pixels
@@ -155,11 +157,11 @@ def get_loss_mapping_rgbd(config, image, depth, viewpoint, initialization=False)
         # Scale by gradient of log tonemapping curve.
         scaling_grad = 1.0 / (rgb_render_clip.detach() + 1e-2)
         # Reweighted L2 loss.
-        loss_rgb = (resid_sq_clip_masked * scaling_grad**2)     
+        loss_rgb = (resid_sq_clip_masked * scaling_grad**2)
 
-    else: # default and original l1 loss 
+    else: # default and original l1 loss
         loss_rgb = torch.abs(image * rgb_pixel_mask - gt_image * rgb_pixel_mask)
-    
+
     l1_depth = torch.abs(depth * depth_pixel_mask - gt_depth * depth_pixel_mask)
 
     return alpha * loss_rgb.sum() / (rgb_pixel_mask.sum() + 1e-6) + (1 - alpha) * l1_depth.mean()
@@ -204,9 +206,9 @@ def get_loss_dist(gaussians, viewpoint, render_pkg, config, res_scale=0.5):
         # Si no hay puntos visibles, evitamos el crash
         near_val = max(0.2, visible_zz.min().item()) if visible_zz.numel() > 0 else 0.2
         far_val  = min(1000.0, visible_zz.max().item()) if visible_zz.numel() > 0 else 1000.0
-        
+
     out_pkg = render_hist(gaussians, viewpoint, bins, (H, W), (near_val, far_val))
-    
+
     hist = out_pkg['render']
     curr_rays = hist.permute(1, 2, 0).reshape(-1, bins)
 
@@ -219,6 +221,6 @@ def get_reg_loss(self, gaussians, viewpoint, render_pkg, config):
     #loss_nearfar = get_loss_nearfar(self, gaussians, viewpoint, render_pkg)
 
     # DistortionReg
-    loss_dist = get_loss_dist(gaussians, viewpoint, render_pkg, config)  
+    loss_dist = get_loss_dist(gaussians, viewpoint, render_pkg, config)
 
-    return 0.1 * loss_dist #+ 0.01 * loss_nearfar
+    return 0.15 * loss_dist #+ 0.01 * loss_nearfar

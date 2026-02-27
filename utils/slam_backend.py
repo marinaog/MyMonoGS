@@ -148,7 +148,7 @@ class BackEnd(mp.Process):
                         total_norm += p.grad.data.norm(2).item() ** 2
                 return total_norm ** 0.5
             return 0.0
-    
+
     def map(self, current_window, prune=False, iters=1):
         if len(current_window) == 0:
             return
@@ -374,12 +374,17 @@ class BackEnd(mp.Process):
             )
 
             gt_image = viewpoint_cam.original_image.cuda()
+
+            if self.config["Dataset"]["raw"]:
+                # Clamp to avoid extreme outliers if necessary, but keep it linear
+                image = torch.clamp(image, max=1.0)
+
             if self.config["Training"].get("loss") and self.config["Training"]["loss"] == "rawnerf":
                 rgb_boundary_threshold = self.config["Training"]["rgb_boundary_threshold"]
                 mask = (gt_image.sum(dim=0) > rgb_boundary_threshold).expand_as(gt_image)
                 Lrawnerf = rawnerf_loss(image, gt_image, mask=mask)
                 loss = (1.0 - self.opt_params.lambda_dssim) * (Lrawnerf) + self.opt_params.lambda_dssim * (1.0 - ssim(image, gt_image))
-            
+
             else:
                 Ll1 = l1_loss(image, gt_image)
                 loss = (1.0 - self.opt_params.lambda_dssim) * (Ll1) + self.opt_params.lambda_dssim * (1.0 - ssim(image, gt_image))
