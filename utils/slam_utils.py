@@ -67,14 +67,17 @@ def get_loss_tracking_rgb(config, image, depth, opacity, viewpoint):
     rgb_boundary_threshold = config["Training"]["rgb_boundary_threshold"]
     rgb_pixel_mask = (gt_image.sum(dim=0) > rgb_boundary_threshold).view(*mask_shape)
     rgb_pixel_mask = rgb_pixel_mask * viewpoint.grad_mask
+
+    if config["Dataset"].get("raw"):
+        image = torch.clamp(image, max=1.0)
+
     if config.get("Training") and config["Training"].get("loss") == "rawnerf":
         eps = 1e-2
-        rgb_render_clip = torch.clamp(image, max=1.0)
-        resid_sq = (rgb_render_clip - gt_image) ** 2
+        resid_sq = (image - gt_image) ** 2
 
         # Scaling by the gradient of the log curve: 1 / (x + eps)
         # We detach the denominator so it acts as a fixed weight per pixel
-        scaling_grad = 1.0 / (rgb_render_clip.detach() + eps)
+        scaling_grad = 1.0 / (image.detach() + eps)
 
         # Apply mask and opacity weighting
         # We include opacity because in tracking, we only want to trust well-reconstructed regions
@@ -124,11 +127,11 @@ def get_loss_mapping_rgb(config, image, depth, viewpoint):
     if config["Dataset"]["raw"]:
         image = torch.clamp(image, max=1.0)
 
-    if config["Training"]["loss"] == "rawnerf":
+    if config["Training"].get("loss") and config["Training"]["loss"] == "rawnerf":
         resid_sq_clip = (image - gt_image) ** 2
         resid_sq_clip_masked = resid_sq_clip * rgb_pixel_mask
         # Scale by gradient of log tonemapping curve.
-        scaling_grad = 1.0 / (rgb_render_clip.detach() + 1e-2)
+        scaling_grad = 1.0 / (image.detach() + 1e-2)
         # Reweighted L2 loss.
         loss_rgb = (resid_sq_clip_masked * scaling_grad**2)
 
@@ -150,12 +153,14 @@ def get_loss_mapping_rgbd(config, image, depth, viewpoint, initialization=False)
     rgb_pixel_mask = (gt_image.sum(dim=0) > rgb_boundary_threshold).view(*depth.shape)
     depth_pixel_mask = (gt_depth > 0.01).view(*depth.shape)
 
+    if config["Dataset"].get("raw"):
+        image = torch.clamp(image, max=1.0)
+
     if config["Training"].get("loss") and config["Training"]["loss"] == "rawnerf":
-        rgb_render_clip = torch.clamp(image, max=1.0)
-        resid_sq_clip = (rgb_render_clip - gt_image) ** 2
+        resid_sq_clip = (image - gt_image) ** 2
         resid_sq_clip_masked = resid_sq_clip * rgb_pixel_mask
         # Scale by gradient of log tonemapping curve.
-        scaling_grad = 1.0 / (rgb_render_clip.detach() + 1e-2)
+        scaling_grad = 1.0 / (image.detach() + 1e-2)
         # Reweighted L2 loss.
         loss_rgb = (resid_sq_clip_masked * scaling_grad**2)
 
