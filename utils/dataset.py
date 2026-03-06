@@ -536,66 +536,70 @@ class EurocDataset(StereoDataset):
 class RealsenseDataset(BaseDataset):
     def __init__(self, args, path, config):
         super().__init__(args, path, config)
-        self.pipeline = rs.pipeline()
-        self.h, self.w = 720, 1280
+        # 1. Initialize variables as None so the object is picklable
+        self.pipeline = None
+        self.profile = None
         
+        # Dimensions and Scaling
+        self.h, self.w = 480, 640
+        self.desired_height, self.desired_width = self.h, self.w
         self.depth_scale = 0
-        if self.config["Dataset"]["sensor_type"] == "depth":
-            self.has_depth = True 
-        else: 
-            self.has_depth = False
+        self.has_depth = (self.config["Dataset"]["sensor_type"] == "depth")
 
-        self.rs_config = rs.config()
-        self.rs_config.enable_stream(rs.stream.color, self.w, self.h, rs.format.bgr8, 30)
-        if self.has_depth:
-            self.rs_config.enable_stream(rs.stream.depth)
-
-        self.profile = self.pipeline.start(self.rs_config)
-
-        if self.has_depth:
-            self.align_to = rs.stream.color
-            self.align = rs.align(self.align_to)
-
-        self.rgb_sensor = self.profile.get_device().query_sensors()[1]
-        self.rgb_sensor.set_option(rs.option.enable_auto_exposure, False)
-        # rgb_sensor.set_option(rs.option.enable_auto_white_balance, True)
-        self.rgb_sensor.set_option(rs.option.enable_auto_white_balance, False)
-        self.rgb_sensor.set_option(rs.option.exposure, 200)
-        self.rgb_profile = rs.video_stream_profile(
-            self.profile.get_stream(rs.stream.color)
-        )
-        self.rgb_intrinsics = self.rgb_profile.get_intrinsics()
+        # 2. Extract intrinsics ONCE at the start using a temporary pipeline
+        # This allows the metadata to be shared without carrying the hardware handle
+        temp_pipeline = rs.pipeline()
+        temp_config = rs.config()
+        temp_config.enable_stream(rs.stream.color, self.w, self.h, rs.format.bgr8, 30)
+        temp_profile = temp_pipeline.start(temp_config)
         
-        self.fx = self.rgb_intrinsics.fx
-        self.fy = self.rgb_intrinsics.fy
-        self.cx = self.rgb_intrinsics.ppx
-        self.cy = self.rgb_intrinsics.ppy
-        self.width = self.rgb_intrinsics.width
-        self.height = self.rgb_intrinsics.height
+        intr = temp_profile.get_stream(rs.stream.color).as_video_stream_profile().get_intrinsics()
+        
+        self.fx, self.fy = intr.fx, intr.fy
+        self.cx, self.cy = intr.ppx, intr.ppy
+        self.width, self.height = intr.width, intr.height
+        self.dist_coeffs = np.asarray(intr.coeffs)
+        
         self.fovx = focal2fov(self.fx, self.width)
         self.fovy = focal2fov(self.fy, self.height)
-        self.K = np.array(
-            [[self.fx, 0.0, self.cx], [0.0, self.fy, self.cy], [0.0, 0.0, 1.0]]
-        )
-
+        self.K = np.array([[self.fx, 0.0, self.cx], [0.0, self.fy, self.cy], [0.0, 0.0, 1.0]])
         self.disorted = True
-        self.dist_coeffs = np.asarray(self.rgb_intrinsics.coeffs)
+        
+        # Pre-compute undistortion maps
         self.map1x, self.map1y = cv2.initUndistortRectifyMap(
             self.K, self.dist_coeffs, np.eye(3), self.K, (self.w, self.h), cv2.CV_32FC1
         )
 
-        if self.has_depth:
-            self.depth_sensor = self.profile.get_device().first_depth_sensor()
-            self.depth_scale  = self.depth_sensor.get_depth_scale()
-            self.depth_profile = rs.video_stream_profile(
-                self.profile.get_stream(rs.stream.depth)
-            )
-            self.depth_intrinsics = self.depth_profile.get_intrinsics()
-        
-        
+        # Cleanup temp pipeline immediately
+        temp_pipeline.stop()
 
+    def _init_rs_hardware(self):
+        """ This method runs only once inside the child process. """
+        self.pipeline = rs.pipeline()
+        self.rs_config = rs.config()
+        self.rs_config.enable_stream(rs.stream.color, self.w, self.h, rs.format.bgr8, 30)
+        
+        if self.has_depth:
+            self.rs_config.enable_stream(rs.stream.depth, self.w, self.h, rs.format.z16, 30)
+            self.align = rs.align(rs.stream.color)
+
+        self.profile = self.pipeline.start(self.rs_config)
+        
+        # Hardware setup (Exposure/WB)
+        rgb_sensor = self.profile.get_device().query_sensors()[1]
+        rgb_sensor.set_option(rs.option.enable_auto_exposure, False)
+        rgb_sensor.set_option(rs.option.enable_auto_white_balance, False)
+        rgb_sensor.set_option(rs.option.exposure, 400) # Increased to 400 for better D455F visibility
+        
+        if self.has_depth:
+            depth_sensor = self.profile.get_device().first_depth_sensor()
+            self.depth_scale = depth_sensor.get_depth_scale()
 
     def __getitem__(self, idx):
+        # 3. Initialize hardware only when first frame is requested
+        if self.pipeline is None:
+            self._init_rs_hardware()
+
         pose = torch.eye(4, device=self.device, dtype=self.dtype)
         depth = None
 
@@ -605,7 +609,7 @@ class RealsenseDataset(BaseDataset):
             aligned_frames = self.align.process(frameset)
             rgb_frame = aligned_frames.get_color_frame()
             aligned_depth_frame = aligned_frames.get_depth_frame()
-            depth = np.array(aligned_depth_frame.get_data())*self.depth_scale
+            depth = np.array(aligned_depth_frame.get_data()) * self.depth_scale
             depth[depth < 0] = 0
             np.nan_to_num(depth, nan=1000)
         else:
@@ -613,6 +617,7 @@ class RealsenseDataset(BaseDataset):
 
         image = np.asanyarray(rgb_frame.get_data())
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        
         if self.disorted:
             image = cv2.remap(image, self.map1x, self.map1y, cv2.INTER_LINEAR)
 
